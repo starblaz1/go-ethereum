@@ -858,6 +858,39 @@ func opStaticCall(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	return ret, nil
 }
 
+func opExecute(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
+	stack := scope.Stack
+	temp := stack.pop()
+	gas := evm.callGasTemp
+	// Parameters: value, inOffset, inSize, retOffset, retSize
+	value, inOffset, inSize, retOffset, retSize := stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop()
+	args := scope.Memory.GetPtr(inOffset.Uint64(), inSize.Uint64())
+
+	if evm.readOnly && !value.IsZero() {
+		return nil, ErrWriteProtection
+	}
+	if !value.IsZero() {
+		gas += params.CallStipend
+	}
+	toAddr := params.ExecutePrecompileAddress
+	ret, returnGas, err := evm.Call(scope.Contract.Address(), toAddr, args, gas, &value)
+
+	if err != nil {
+		temp.Clear()
+	} else {
+		temp.SetOne()
+	}
+	stack.push(&temp)
+	if err == nil || err == ErrExecutionReverted {
+		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
+	}
+
+	scope.Contract.RefundGas(returnGas, evm.Config.Tracer, tracing.GasChangeCallLeftOverRefunded)
+
+	evm.returnData = ret
+	return ret, nil
+}
+
 func opReturn(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	offset, size := scope.Stack.pop(), scope.Stack.pop()
 	ret := scope.Memory.GetCopy(offset.Uint64(), size.Uint64())

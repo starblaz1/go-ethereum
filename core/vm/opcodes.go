@@ -250,6 +250,7 @@ const (
 
 	STATICCALL    OpCode = 0xfa
 	EXTSTATICCALL OpCode = 0xfb
+	EXECUTE       OpCode = 0xfc
 	REVERT        OpCode = 0xfd
 	INVALID       OpCode = 0xfe
 	SELFDESTRUCT  OpCode = 0xff
@@ -449,6 +450,7 @@ var opCodeToString = [256]string{
 
 	STATICCALL:    "STATICCALL",
 	EXTSTATICCALL: "EXTSTATICCALL",
+	EXECUTE:       "EXECUTE",
 	REVERT:        "REVERT",
 	INVALID:       "INVALID",
 	SELFDESTRUCT:  "SELFDESTRUCT",
@@ -625,6 +627,7 @@ var stringToOp = map[string]OpCode{
 	"EXTCALL":         EXTCALL,
 	"EXTDELEGATECALL": EXTDELEGATECALL,
 	"EXTSTATICCALL":   EXTSTATICCALL,
+	"EXECUTE":         EXECUTE,
 	"CALL":            CALL,
 	"RETURN":          RETURN,
 	"CALLCODE":        CALLCODE,

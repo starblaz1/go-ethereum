@@ -596,6 +596,74 @@ func TestOpTstore(t *testing.T) {
 	}
 }
 
+func TestOpExecuteCallsPrecompile(t *testing.T) {
+	var (
+		statedb, _   = state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+		evm          = NewEVM(BlockContext{}, statedb, params.MergedTestChainConfig, Config{})
+		stack        = newstack()
+		mem          = NewMemory()
+		caller       = common.Address{1}
+		contractAddr = common.Address{2}
+		contract     = NewContract(caller, contractAddr, new(uint256.Int), 1_000_000, nil)
+		scope        = &ScopeContext{mem, stack, contract}
+		pc           uint64
+		input        = []byte{0xaa, 0xbb, 0xcc, 0xdd}
+	)
+
+	statedb.CreateAccount(caller)
+	statedb.CreateAccount(contractAddr)
+
+	mem.Resize(64)
+	mem.Set(0, uint64(len(input)), input)
+
+	evm.precompiles[params.ExecutePrecompileAddress] = executeTestPrecompile{}
+	evm.callGasTemp = 50_000
+
+	// Stack order: retSize, retOffset, inSize, inOffset, value, gas
+	stack.push(uint256.NewInt(uint64(len(input))))
+	stack.push(uint256.NewInt(0))
+	stack.push(uint256.NewInt(uint64(len(input))))
+	stack.push(uint256.NewInt(0))
+	stack.push(uint256.NewInt(0))      // value
+	stack.push(uint256.NewInt(50_000)) // gas
+
+	ret, err := opExecute(&pc, evm, scope)
+	if err != nil {
+		t.Fatalf("opExecute returned error: %v", err)
+	}
+	if len(ret) == 0 {
+		t.Fatalf("expected return data from execute precompile")
+	}
+	if stack.len() != 1 || stack.peek().IsZero() {
+		t.Fatalf("expected success indicator on stack, stack=%v", stack.data)
+	}
+	expected := make([]byte, len(input))
+	for i, b := range input {
+		expected[i] = b ^ 0xff
+	}
+	if !bytes.Equal(ret, expected) {
+		t.Fatalf("unexpected return data, got %x want %x", ret, expected)
+	}
+	memData := mem.GetCopy(0, uint64(len(expected)))
+	if !bytes.Equal(memData, expected) {
+		t.Fatalf("memory not updated with return data, got %x want %x", memData, expected)
+	}
+}
+
+type executeTestPrecompile struct{}
+
+func (executeTestPrecompile) RequiredGas(input []byte) uint64 { return uint64(len(input)) }
+
+func (executeTestPrecompile) Run(input []byte) ([]byte, error) {
+	out := make([]byte, len(input))
+	for i, b := range input {
+		out[i] = b ^ 0xff
+	}
+	return out, nil
+}
+
+func (executeTestPrecompile) Name() string { return "EXECUTE_TEST" }
+
 func BenchmarkOpKeccak256(bench *testing.B) {
 	var (
 		evm   = NewEVM(BlockContext{}, nil, params.TestChainConfig, Config{})
