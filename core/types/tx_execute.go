@@ -41,6 +41,10 @@ type ExecuteTx struct {
 	GasFeeCap *uint256.Int // a.k.a. maxFeePerGas
 	Gas       uint64
 
+	To    *common.Address `rlp:"nil"`
+	Value *uint256.Int
+	Data  []byte
+
 	PreStateHash    common.Hash
 	WitnessSize     uint32
 	WithdrawalsSize uint32
@@ -63,6 +67,9 @@ type executeTxRLP struct {
 	GasTipCap       *uint256.Int
 	GasFeeCap       *uint256.Int
 	Gas             uint64
+	To              *common.Address `rlp:"nil"`
+	Value           *uint256.Int
+	Data            []byte
 	PreStateHash    common.Hash
 	WitnessSize     uint64
 	WithdrawalsSize uint64
@@ -82,6 +89,8 @@ func (tx *ExecuteTx) copy() TxData {
 	cpy := &ExecuteTx{
 		Nonce:           tx.Nonce,
 		Gas:             tx.Gas,
+		To:              copyAddressPtr(tx.To),
+		Data:            common.CopyBytes(tx.Data),
 		PreStateHash:    tx.PreStateHash,
 		WitnessSize:     tx.WitnessSize,
 		WithdrawalsSize: tx.WithdrawalsSize,
@@ -91,6 +100,7 @@ func (tx *ExecuteTx) copy() TxData {
 		Witness:         common.CopyBytes(tx.Witness),
 		Withdrawals:     common.CopyBytes(tx.Withdrawals),
 		BlobHashes:      make([]common.Hash, len(tx.BlobHashes)),
+		Value:           new(uint256.Int),
 		ChainID:         new(uint256.Int),
 		GasTipCap:       new(uint256.Int),
 		GasFeeCap:       new(uint256.Int),
@@ -99,6 +109,9 @@ func (tx *ExecuteTx) copy() TxData {
 		S:               new(uint256.Int),
 	}
 	copy(cpy.BlobHashes, tx.BlobHashes)
+	if tx.Value != nil {
+		cpy.Value.Set(tx.Value)
+	}
 	if tx.ChainID != nil {
 		cpy.ChainID.Set(tx.ChainID)
 	}
@@ -124,15 +137,23 @@ func (tx *ExecuteTx) copy() TxData {
 func (tx *ExecuteTx) txType() byte           { return ExecuteTxType }
 func (tx *ExecuteTx) chainID() *big.Int      { return tx.ChainID.ToBig() }
 func (tx *ExecuteTx) accessList() AccessList { return nil }
-func (tx *ExecuteTx) data() []byte           { return nil }
+func (tx *ExecuteTx) data() []byte           { return tx.Data }
 func (tx *ExecuteTx) gas() uint64            { return tx.Gas }
 func (tx *ExecuteTx) gasFeeCap() *big.Int    { return tx.GasFeeCap.ToBig() }
 func (tx *ExecuteTx) gasTipCap() *big.Int    { return tx.GasTipCap.ToBig() }
 func (tx *ExecuteTx) gasPrice() *big.Int     { return tx.GasFeeCap.ToBig() }
-func (tx *ExecuteTx) value() *big.Int        { return new(big.Int) }
-func (tx *ExecuteTx) nonce() uint64          { return tx.Nonce }
+func (tx *ExecuteTx) value() *big.Int {
+	if tx.Value == nil {
+		return new(big.Int)
+	}
+	return tx.Value.ToBig()
+}
+func (tx *ExecuteTx) nonce() uint64 { return tx.Nonce }
 
 func (tx *ExecuteTx) to() *common.Address {
+	if tx.To != nil {
+		return copyAddressPtr(tx.To)
+	}
 	addr := params.ExecutePrecompileAddress
 	return &addr
 }
@@ -166,6 +187,9 @@ func (tx *ExecuteTx) encode(b *bytes.Buffer) error {
 		GasTipCap:       tx.GasTipCap,
 		GasFeeCap:       tx.GasFeeCap,
 		Gas:             tx.Gas,
+		To:              tx.To,
+		Value:           ensureUint256(tx.Value),
+		Data:            tx.Data,
 		PreStateHash:    tx.PreStateHash,
 		WitnessSize:     uint64(tx.WitnessSize),
 		WithdrawalsSize: uint64(tx.WithdrawalsSize),
@@ -191,6 +215,9 @@ func (tx *ExecuteTx) decode(input []byte) error {
 	tx.GasTipCap = ensureUint256(dec.GasTipCap)
 	tx.GasFeeCap = ensureUint256(dec.GasFeeCap)
 	tx.Gas = dec.Gas
+	tx.To = copyAddressPtr(dec.To)
+	tx.Value = ensureUint256(dec.Value)
+	tx.Data = dec.Data
 	tx.PreStateHash = dec.PreStateHash
 	tx.WitnessSize = uint32(dec.WitnessSize)
 	tx.WithdrawalsSize = uint32(dec.WithdrawalsSize)
@@ -222,6 +249,9 @@ func (tx *ExecuteTx) sigHash(chainID *big.Int) common.Hash {
 			tx.GasTipCap,
 			tx.GasFeeCap,
 			tx.Gas,
+			tx.To,
+			tx.Value,
+			tx.Data,
 			tx.PreStateHash,
 			tx.WitnessSize,
 			tx.WithdrawalsSize,

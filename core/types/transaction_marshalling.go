@@ -182,9 +182,12 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 	case *ExecuteTx:
 		enc.ChainID = (*hexutil.Big)(itx.ChainID.ToBig())
 		enc.Nonce = (*hexutil.Uint64)(&itx.Nonce)
+		enc.To = tx.To()
 		enc.Gas = (*hexutil.Uint64)(&itx.Gas)
 		enc.MaxFeePerGas = (*hexutil.Big)(itx.GasFeeCap.ToBig())
 		enc.MaxPriorityFeePerGas = (*hexutil.Big)(itx.GasTipCap.ToBig())
+		enc.Value = (*hexutil.Big)(itx.Value.ToBig())
+		enc.Input = (*hexutil.Bytes)(&itx.Data)
 		if itx.BlobHashes != nil {
 			enc.BlobVersionedHashes = itx.BlobHashes
 		}
@@ -565,6 +568,10 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'gas' for txdata")
 		}
 		itx.Gas = uint64(*dec.Gas)
+		if dec.To != nil {
+			val := *dec.To
+			itx.To = &val
+		}
 		if dec.MaxPriorityFeePerGas == nil {
 			return errors.New("missing required field 'maxPriorityFeePerGas' for txdata")
 		}
@@ -573,6 +580,14 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'maxFeePerGas' for txdata")
 		}
 		itx.GasFeeCap = uint256.MustFromBig((*big.Int)(dec.MaxFeePerGas))
+		if dec.Value == nil {
+			return errors.New("missing required field 'value' in transaction")
+		}
+		itx.Value = uint256.MustFromBig((*big.Int)(dec.Value))
+		if dec.Input == nil {
+			return errors.New("missing required field 'input' in transaction")
+		}
+		itx.Data = *dec.Input
 		if dec.PreStateHash == nil {
 			return errors.New("missing required field 'preStateHash' in transaction")
 		}

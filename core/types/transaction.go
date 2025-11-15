@@ -526,6 +526,9 @@ type ExecutePayload struct {
 	Coinbase        common.Address
 	BlockNumber     uint64
 	Timestamp       uint64
+	To              *common.Address
+	Value           *big.Int
+	Data            []byte
 	Witness         []byte
 	Withdrawals     []byte
 	BlobHashes      []common.Hash
@@ -544,10 +547,17 @@ func (tx *Transaction) ExecutePayload() *ExecutePayload {
 		Coinbase:        exectx.Coinbase,
 		BlockNumber:     exectx.BlockNumber,
 		Timestamp:       exectx.Timestamp,
-		Witness:         common.CopyBytes(exectx.Witness),
-		Withdrawals:     common.CopyBytes(exectx.Withdrawals),
-		BlobHashes:      make([]common.Hash, len(exectx.BlobHashes)),
+		To:              copyAddressPtr(exectx.To),
 	}
+	if exectx.Value != nil {
+		payload.Value = exectx.Value.ToBig()
+	} else {
+		payload.Value = new(big.Int)
+	}
+	payload.Data = common.CopyBytes(exectx.Data)
+	payload.Witness = common.CopyBytes(exectx.Witness)
+	payload.Withdrawals = common.CopyBytes(exectx.Withdrawals)
+	payload.BlobHashes = make([]common.Hash, len(exectx.BlobHashes))
 	copy(payload.BlobHashes, exectx.BlobHashes)
 	return payload
 }

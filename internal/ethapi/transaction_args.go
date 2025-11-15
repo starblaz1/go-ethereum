@@ -553,6 +553,11 @@ func (args *TransactionArgs) ToTransaction(defaultType int) *types.Transaction {
 			timestamp = uint64(*args.Timestamp)
 		}
 		var blobHashes []common.Hash
+		var toPtr *common.Address
+		if args.To != nil {
+			addr := *args.To
+			toPtr = &addr
+		}
 		if args.BlobHashes != nil {
 			blobHashes = append([]common.Hash{}, args.BlobHashes...)
 		}
@@ -562,6 +567,9 @@ func (args *TransactionArgs) ToTransaction(defaultType int) *types.Transaction {
 			Gas:             uint64(*args.Gas),
 			GasFeeCap:       uint256.MustFromBig((*big.Int)(args.MaxFeePerGas)),
 			GasTipCap:       uint256.MustFromBig((*big.Int)(args.MaxPriorityFeePerGas)),
+			To:              toPtr,
+			Value:           uint256.MustFromBig((*big.Int)(args.Value)),
+			Data:            args.data(),
 			PreStateHash:    preStateHash,
 			Coinbase:        coinbase,
 			BlockNumber:     blockNumber,
