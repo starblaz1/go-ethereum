@@ -70,6 +70,16 @@ type TransactionArgs struct {
 
 	// For SetCodeTxType
 	AuthorizationList []types.SetCodeAuthorization `json:"authorizationList"`
+
+	// For ExecuteTxType
+	PreStateHash    *common.Hash    `json:"preStateHash,omitempty"`
+	Coinbase        *common.Address `json:"coinbase,omitempty"`
+	BlockNumber     *hexutil.Uint64 `json:"blockNumber,omitempty"`
+	Timestamp       *hexutil.Uint64 `json:"timestamp,omitempty"`
+	Witness         *hexutil.Bytes  `json:"witness,omitempty"`
+	Withdrawals     *hexutil.Bytes  `json:"withdrawals,omitempty"`
+	WitnessSize     *hexutil.Uint64 `json:"witnessSize,omitempty"`
+	WithdrawalsSize *hexutil.Uint64 `json:"withdrawalsSize,omitempty"`
 }
 
 // from retrieves the transaction sender address.
@@ -128,6 +138,12 @@ func (args *TransactionArgs) setDefaults(ctx context.Context, b Backend, config 
 	}
 	if args.BlobHashes != nil && len(args.BlobHashes) > params.BlobTxMaxBlobs {
 		return fmt.Errorf("too many blobs in transaction (have=%d, max=%d)", len(args.BlobHashes), params.BlobTxMaxBlobs)
+	}
+
+	// Route Execute transactions to the dedicated precompile address.
+	if args.PreStateHash != nil && args.To == nil {
+		executeAddr := params.ExecutePrecompileAddress
+		args.To = &executeAddr
 	}
 
 	// create check
@@ -502,6 +518,8 @@ func (args *TransactionArgs) ToTransaction(defaultType int) *types.Transaction {
 	switch {
 	case args.AuthorizationList != nil || defaultType == types.SetCodeTxType:
 		usedType = types.SetCodeTxType
+	case args.PreStateHash != nil || defaultType == types.ExecuteTxType:
+		usedType = types.ExecuteTxType
 	case args.BlobHashes != nil || defaultType == types.BlobTxType:
 		usedType = types.BlobTxType
 	case args.MaxFeePerGas != nil || defaultType == types.DynamicFeeTxType:
@@ -515,6 +533,46 @@ func (args *TransactionArgs) ToTransaction(defaultType int) *types.Transaction {
 	}
 	var data types.TxData
 	switch usedType {
+	case types.ExecuteTxType:
+		witness := copyHexBytes(args.Witness)
+		withdrawals := copyHexBytes(args.Withdrawals)
+		var preStateHash common.Hash
+		if args.PreStateHash != nil {
+			preStateHash = *args.PreStateHash
+		}
+		var coinbase common.Address
+		if args.Coinbase != nil {
+			coinbase = *args.Coinbase
+		}
+		var blockNumber uint64
+		if args.BlockNumber != nil {
+			blockNumber = uint64(*args.BlockNumber)
+		}
+		var timestamp uint64
+		if args.Timestamp != nil {
+			timestamp = uint64(*args.Timestamp)
+		}
+		var blobHashes []common.Hash
+		if args.BlobHashes != nil {
+			blobHashes = append([]common.Hash{}, args.BlobHashes...)
+		}
+		data = &types.ExecuteTx{
+			ChainID:         uint256.MustFromBig((*big.Int)(args.ChainID)),
+			Nonce:           uint64(*args.Nonce),
+			Gas:             uint64(*args.Gas),
+			GasFeeCap:       uint256.MustFromBig((*big.Int)(args.MaxFeePerGas)),
+			GasTipCap:       uint256.MustFromBig((*big.Int)(args.MaxPriorityFeePerGas)),
+			PreStateHash:    preStateHash,
+			Coinbase:        coinbase,
+			BlockNumber:     blockNumber,
+			Timestamp:       timestamp,
+			Witness:         witness,
+			Withdrawals:     withdrawals,
+			WitnessSize:     uint32(len(witness)),
+			WithdrawalsSize: uint32(len(withdrawals)),
+			BlobHashes:      blobHashes,
+		}
+
 	case types.SetCodeTxType:
 		al := types.AccessList{}
 		if args.AccessList != nil {
@@ -603,6 +661,15 @@ func (args *TransactionArgs) ToTransaction(defaultType int) *types.Transaction {
 		}
 	}
 	return types.NewTx(data)
+}
+
+func copyHexBytes(b *hexutil.Bytes) []byte {
+	if b == nil {
+		return nil
+	}
+	out := make([]byte, len(*b))
+	copy(out, *b)
+	return out
 }
 
 // IsEIP4844 returns an indicator if the args contains EIP4844 fields.

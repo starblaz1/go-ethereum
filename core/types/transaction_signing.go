@@ -231,6 +231,9 @@ func newModernSigner(chainID *big.Int, fork forks.Fork) Signer {
 	if fork >= forks.Prague {
 		s.txtypes.set(SetCodeTxType)
 	}
+	if fork >= forks.Osaka {
+		s.txtypes.set(ExecuteTxType)
+	}
 	return s
 }
 

@@ -168,6 +168,7 @@ var PrecompiledContractsOsaka = PrecompiledContracts{
 	common.BytesToAddress([]byte{0x10}): &bls12381MapG1{},
 	common.BytesToAddress([]byte{0x11}): &bls12381MapG2{},
 
+	params.ExecutePrecompileAddress:          &executePrecompile{},
 	common.BytesToAddress([]byte{0x1, 0x00}): &p256Verify{},
 }
 
@@ -1450,4 +1451,21 @@ func (c *p256Verify) Run(input []byte) ([]byte, error) {
 
 func (c *p256Verify) Name() string {
 	return "P256VERIFY"
+}
+
+var errExecutePrecompileNotImplemented = errors.New("EXECUTE precompile not implemented")
+
+// EXECUTE is a placeholder for the upcoming EXECUTE precompile
+type executePrecompile struct{}
+
+func (c *executePrecompile) RequiredGas(input []byte) uint64 {
+	return params.ExecutePrecompileGas
+}
+
+func (c *executePrecompile) Run(input []byte) ([]byte, error) {
+	return nil, errExecutePrecompileNotImplemented
+}
+
+func (c *executePrecompile) Name() string {
+	return "EXECUTE"
 }

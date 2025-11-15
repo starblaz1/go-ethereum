@@ -50,6 +50,7 @@ const (
 	DynamicFeeTxType = 0x02
 	BlobTxType       = 0x03
 	SetCodeTxType    = 0x04
+	ExecuteTxType    = 0x05
 )
 
 // Transaction is an Ethereum transaction.
@@ -212,6 +213,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		inner = new(BlobTx)
 	case SetCodeTxType:
 		inner = new(SetCodeTx)
+	case ExecuteTxType:
+		inner = new(ExecuteTx)
 	default:
 		return nil, ErrTxTypeNotSupported
 	}
@@ -438,6 +441,9 @@ func (tx *Transaction) BlobHashes() []common.Hash {
 	if blobtx, ok := tx.inner.(*BlobTx); ok {
 		return blobtx.BlobHashes
 	}
+	if exectx, ok := tx.inner.(*ExecuteTx); ok {
+		return exectx.BlobHashes
+	}
 	return nil
 }
 
@@ -510,6 +516,40 @@ func (tx *Transaction) SetCodeAuthorizations() []SetCodeAuthorization {
 		return nil
 	}
 	return setcodetx.AuthList
+}
+
+// ExecutePayload is a helper struct exposing the EXECUTE-specific data.
+type ExecutePayload struct {
+	PreStateHash    common.Hash
+	WitnessSize     uint32
+	WithdrawalsSize uint32
+	Coinbase        common.Address
+	BlockNumber     uint64
+	Timestamp       uint64
+	Witness         []byte
+	Withdrawals     []byte
+	BlobHashes      []common.Hash
+}
+
+// ExecutePayload returns the EXECUTE-specific payload if the transaction is of ExecuteTxType.
+func (tx *Transaction) ExecutePayload() *ExecutePayload {
+	exectx, ok := tx.inner.(*ExecuteTx)
+	if !ok {
+		return nil
+	}
+	payload := &ExecutePayload{
+		PreStateHash:    exectx.PreStateHash,
+		WitnessSize:     exectx.WitnessSize,
+		WithdrawalsSize: exectx.WithdrawalsSize,
+		Coinbase:        exectx.Coinbase,
+		BlockNumber:     exectx.BlockNumber,
+		Timestamp:       exectx.Timestamp,
+		Witness:         common.CopyBytes(exectx.Witness),
+		Withdrawals:     common.CopyBytes(exectx.Withdrawals),
+		BlobHashes:      make([]common.Hash, len(exectx.BlobHashes)),
+	}
+	copy(payload.BlobHashes, exectx.BlobHashes)
+	return payload
 }
 
 // SetCodeAuthorities returns a list of unique authorities from the
