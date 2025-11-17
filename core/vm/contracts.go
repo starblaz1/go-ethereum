@@ -1641,6 +1641,9 @@ func (c *executePrecompile) Run(input []byte) ([]byte, error) {
 	caller := params.ExecutePrecompileAddress // Precompile is the caller
 	ret, leftOverGas, err := statelessEVM.Call(caller, toAddr, execData, gasLimit, value)
 
+	// Calculate total gas consumed during stateless execution
+	gasConsumed := gasLimit - leftOverGas
+
 	// Handle missing witness data errors
 	// If the StateDB read fails due to missing witness data, convert to custom error
 	if err != nil {
@@ -1648,17 +1651,26 @@ func (c *executePrecompile) Run(input []byte) ([]byte, error) {
 		// Database read failures will manifest as various errors
 		// We need to detect these and convert to our custom error
 		if err.Error() == "not found" || err.Error() == "missing trie node" {
-			return nil, fmt.Errorf("%w: %v", errExecuteMissingWitnessData, err)
+			return nil, fmt.Errorf("%w: %v (gas consumed: %d)", errExecuteMissingWitnessData, err, gasConsumed)
 		}
-		// For other errors, return as-is (they will cause REVERT)
-		return nil, err
+		// Check for out of gas errors
+		if err == ErrOutOfGas {
+			return nil, fmt.Errorf("EXECUTE precompile: out of gas (consumed: %d, limit: %d)", gasConsumed, gasLimit)
+		}
+		// For other errors, return as-is with gas consumed info (they will cause REVERT)
+		return nil, fmt.Errorf("EXECUTE precompile execution failed (gas consumed: %d): %w", gasConsumed, err)
 	}
 
-	_ = leftOverGas
 	_ = withdrawalsData
 
-	// Return the execution result
-	return ret, nil
+	// Return the execution result with gas consumed encoded in the first 32 bytes
+	// Format: [32 bytes: gas consumed (big-endian)] + [execution result]
+	gasConsumedBytes := make([]byte, 32)
+	new(big.Int).SetUint64(gasConsumed).FillBytes(gasConsumedBytes)
+
+	// Prepend gas consumed to the return value
+	result := append(gasConsumedBytes, ret...)
+	return result, nil
 }
 
 func (c *executePrecompile) Name() string {
