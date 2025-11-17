@@ -33,6 +33,8 @@ import (
 	patched_big "github.com/ethereum/go-bigmodexpfix/src/math/big"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/bitutil"
+	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/blake2b"
@@ -40,6 +42,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/crypto/secp256r1"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/holiman/uint256"
 	"golang.org/x/crypto/ripemd160"
 )
@@ -1453,17 +1457,208 @@ func (c *p256Verify) Name() string {
 	return "P256VERIFY"
 }
 
-var errExecutePrecompileNotImplemented = errors.New("EXECUTE precompile not implemented")
+var (
+	errExecutePrecompileNotImplemented = errors.New("EXECUTE precompile not implemented")
+	errExecuteMissingWitnessData       = errors.New("EXECUTE precompile: missing witness data")
+	errExecuteInvalidInput             = errors.New("EXECUTE precompile: invalid input format")
+)
 
-// EXECUTE is a placeholder for the upcoming EXECUTE precompile
+// EXECUTE precompile implements stateless execution using a witness
 type executePrecompile struct{}
 
 func (c *executePrecompile) RequiredGas(input []byte) uint64 {
-	return params.ExecutePrecompileGas
+	// Static gas is zero, dynamic gas depends on call data
+	return 0
 }
 
 func (c *executePrecompile) Run(input []byte) ([]byte, error) {
-	return nil, errExecutePrecompileNotImplemented
+	// Minimum input size check: 120 bytes for fixed fields
+	const minInputSize = 120
+	if len(input) < minInputSize {
+		return nil, errExecuteInvalidInput
+	}
+
+	// Parse fixed fields according to the calldata format:
+	// Offset 0-32: Chain ID (32 bytes)
+	chainID := new(big.Int).SetBytes(input[0:32])
+	// Validate chain ID matches mainnet (native rollup uses same config as L1)
+	if chainID.Cmp(params.MainnetChainConfig.ChainID) != 0 {
+		return nil, fmt.Errorf("EXECUTE precompile: chain ID mismatch (got %v, expected %v)", chainID, params.MainnetChainConfig.ChainID)
+	}
+
+	// Offset 32-64: Pre-state hash (32 bytes)
+	preStateHash := common.BytesToHash(input[32:64])
+
+	// Offset 64-72: Gas limit (8 bytes, little-endian)
+	gasLimit := binary.LittleEndian.Uint64(input[64:72])
+
+	// Offset 72-76: Witness size (W1) + Withdrawals size (W2) (4 bytes)
+	// NOTE: Format is ambiguous - assuming W1 is first 2 bytes (uint16), W2 is next 2 bytes (uint16)
+	// If format is different (e.g., two uint32s or sum), this needs to be adjusted
+	witnessSize := binary.LittleEndian.Uint16(input[72:74])
+	withdrawalsSize := binary.LittleEndian.Uint16(input[74:76])
+
+	// Offset 76-96: Coinbase address (20 bytes)
+	coinbase := common.BytesToAddress(input[76:96])
+
+	// Offset 96-104: Block number (8 bytes, little-endian)
+	blockNumber := binary.LittleEndian.Uint64(input[96:104])
+
+	// Offset 104-112: Gas price (8 bytes, little-endian)
+	gasPrice := binary.LittleEndian.Uint64(input[104:112])
+
+	// Offset 112-120: Timestamp (8 bytes, little-endian)
+	timestamp := binary.LittleEndian.Uint64(input[112:120])
+
+	// Offset 120: Witness (W1 bytes, RLP-encoded)
+	witnessOffset := uint64(120)
+	witnessEnd := witnessOffset + uint64(witnessSize)
+	if uint64(len(input)) < witnessEnd {
+		return nil, errExecuteInvalidInput
+	}
+	witnessData := input[witnessOffset:witnessEnd]
+
+	// Offset 120+W1: Withdrawals (W2 bytes)
+	// TODO: Withdrawals processing will be handled later. For now, we parse and skip them.
+	withdrawalsOffset := witnessEnd
+	withdrawalsEnd := withdrawalsOffset + uint64(withdrawalsSize)
+	if uint64(len(input)) < withdrawalsEnd {
+		return nil, errExecuteInvalidInput
+	}
+	withdrawalsData := input[withdrawalsOffset:withdrawalsEnd]
+	// TODO: Process withdrawals data - will be implemented later
+
+	// Offset 120+W1+W2: Blob hashes (W3, ignored in this version)
+	blobHashesOffset := withdrawalsEnd
+	// Blob hashes are ignored, but we need to skip them if present
+	// For now, we'll assume they're not included or are at the end
+
+	// Execution target fields (from ExecuteTx)
+	// These come after the blob hashes (or after withdrawals if blob hashes are omitted)
+	execOffset := blobHashesOffset
+	const execTargetHeaderSize = 20 + 32 + 4 // To (20) + Value (32) + Data length (4)
+	if uint64(len(input)) < execOffset+execTargetHeaderSize {
+		return nil, errExecuteInvalidInput
+	}
+
+	// To address (20 bytes)
+	toAddr := common.BytesToAddress(input[execOffset : execOffset+20])
+	execOffset += 20
+
+	// Value (32 bytes)
+	value := new(uint256.Int).SetBytes(input[execOffset : execOffset+32])
+	execOffset += 32
+
+	// Data length (4 bytes, little-endian)
+	dataLength := binary.LittleEndian.Uint32(input[execOffset : execOffset+4])
+	execOffset += 4
+
+	// Data (variable length)
+	if uint64(len(input)) < execOffset+uint64(dataLength) {
+		return nil, errExecuteInvalidInput
+	}
+	execData := input[execOffset : execOffset+uint64(dataLength)]
+
+	// Decode the witness from RLP
+	witness := new(stateless.Witness)
+	if err := rlp.DecodeBytes(witnessData, witness); err != nil {
+		return nil, fmt.Errorf("EXECUTE precompile: failed to decode witness: %w", err)
+	}
+
+	// Verify pre-state hash matches witness root
+	witnessRoot := witness.Root()
+	if witnessRoot != preStateHash {
+		return nil, fmt.Errorf("EXECUTE precompile: pre-state hash mismatch (got %x, expected %x)", witnessRoot, preStateHash)
+	}
+
+	// Create stateless database from witness
+	memdb := witness.MakeHashDB()
+
+	// Create StateDB from the stateless database
+	// This StateDB is backed by the witness data, so missing data will cause errors
+	statelessDB := state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), nil)
+	statedb, err := state.New(witnessRoot, statelessDB)
+	if err != nil {
+		return nil, fmt.Errorf("EXECUTE precompile: failed to create stateless StateDB: %w", err)
+	}
+
+	// Use mainnet chain config for native rollup
+	// Since the native rollup uses the same chain config as L1 (mainnet),
+	// we use MainnetChainConfig directly. This ensures correct fork rules
+	// and opcode availability (including EXECUTE opcode in Osaka fork).
+	chainConfig := params.MainnetChainConfig
+
+	// Helper functions for BlockContext
+	canTransfer := func(db StateDB, addr common.Address, amount *uint256.Int) bool {
+		return db.GetBalance(addr).Cmp(amount) >= 0
+	}
+	transfer := func(db StateDB, sender, recipient common.Address, amount *uint256.Int) {
+		db.SubBalance(sender, amount, tracing.BalanceChangeTransfer)
+		db.AddBalance(recipient, amount, tracing.BalanceChangeTransfer)
+	}
+
+	// Create BlockContext from calldata fields
+	blockCtx := BlockContext{
+		CanTransfer: canTransfer,
+		Transfer:    transfer,
+		GetHash: func(n uint64) common.Hash {
+			// Get block hash from witness headers (EIP-2935)
+			// Headers are in reverse order: 0=parent, 1=parent's-parent, etc.
+			blockDiff := blockNumber - n
+			if int(blockDiff) < len(witness.Headers) {
+				return witness.Headers[blockDiff].Hash()
+			}
+			return common.Hash{} // Block hash not in witness
+		},
+		Coinbase:    coinbase,
+		GasLimit:    gasLimit,
+		BlockNumber: new(big.Int).SetUint64(blockNumber),
+		Time:        timestamp,
+		Difficulty:  big.NewInt(0),                    // Post-merge, difficulty is 0
+		BaseFee:     new(big.Int).SetUint64(gasPrice), // Using gas price as base fee
+		BlobBaseFee: big.NewInt(0),
+		Random:      nil, // TODO: Get from witness if available
+	}
+
+	// Create TxContext
+	txCtx := TxContext{
+		Origin:     common.Address{}, // TODO: Get from calling transaction
+		GasPrice:   new(big.Int).SetUint64(gasPrice),
+		BlobHashes: nil, // TODO: Parse from blob hashes if needed
+		BlobFeeCap: big.NewInt(0),
+		// AccessEvents will be set by SetTxContext if needed (EIP-4762)
+	}
+
+	// Create new EVM with stateless StateDB
+	evmConfig := Config{
+		Tracer: nil,
+	}
+	statelessEVM := NewEVM(blockCtx, statedb, chainConfig, evmConfig)
+	statelessEVM.SetTxContext(txCtx) // Set the transaction context (handles AccessEvents if needed)
+
+	// Execute the target transaction/code
+	// We perform a CALL to the target address with the specified value and data
+	caller := params.ExecutePrecompileAddress // Precompile is the caller
+	ret, leftOverGas, err := statelessEVM.Call(caller, toAddr, execData, gasLimit, value)
+
+	// Handle missing witness data errors
+	// If the StateDB read fails due to missing witness data, convert to custom error
+	if err != nil {
+		// Check if error is due to missing witness data
+		// Database read failures will manifest as various errors
+		// We need to detect these and convert to our custom error
+		if err.Error() == "not found" || err.Error() == "missing trie node" {
+			return nil, fmt.Errorf("%w: %v", errExecuteMissingWitnessData, err)
+		}
+		// For other errors, return as-is (they will cause REVERT)
+		return nil, err
+	}
+
+	_ = leftOverGas
+	_ = withdrawalsData
+
+	// Return the execution result
+	return ret, nil
 }
 
 func (c *executePrecompile) Name() string {
