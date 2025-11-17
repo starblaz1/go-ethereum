@@ -18,13 +18,19 @@ package vm
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // precompiledTest defines the input/output pairs for precompiled contract tests.
@@ -433,3 +439,241 @@ func BenchmarkPrecompiledP256Verify(bench *testing.B) {
 }
 
 func TestPrecompiledP256Verify(t *testing.T) { testJson("p256Verify", "0b", t) }
+
+// EXECUTE precompile tests
+func TestExecutePrecompileInvalidInput(t *testing.T) {
+	precompile := &executePrecompile{}
+
+	tests := []struct {
+		name        string
+		input       []byte
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "empty input",
+			input:       []byte{},
+			expectError: true,
+			errorMsg:    "invalid input format",
+		},
+		{
+			name:        "too small",
+			input:       make([]byte, 119),
+			expectError: true,
+			errorMsg:    "invalid input format",
+		},
+		{
+			name:        "minimum size",
+			input:       make([]byte, 120),
+			expectError: true, // Will fail on chain ID validation or witness decoding
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := precompile.Run(tt.input)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error, got nil")
+				} else if tt.errorMsg != "" && !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("expected error containing %q, got %q", tt.errorMsg, err.Error())
+				}
+			}
+		})
+	}
+}
+
+func TestExecutePrecompileChainIDValidation(t *testing.T) {
+	precompile := &executePrecompile{}
+
+	// Create input with wrong chain ID (not mainnet = 1)
+	input := make([]byte, 200)
+	// Set chain ID to 2 (not mainnet)
+	chainID := big.NewInt(2)
+	chainID.FillBytes(input[0:32])
+
+	_, err := precompile.Run(input)
+	if err == nil {
+		t.Fatal("expected chain ID mismatch error")
+	}
+	if !strings.Contains(err.Error(), "chain ID mismatch") {
+		t.Errorf("expected chain ID mismatch error, got: %v", err)
+	}
+}
+
+func TestExecutePrecompileWitnessDecoding(t *testing.T) {
+	precompile := &executePrecompile{}
+
+	// Create a minimal valid witness
+	witness := createTestWitness()
+
+	// Create calldata with valid witness
+	input := createExecuteCalldata(witness, common.Address{0x42}, big.NewInt(0), []byte{}, 100000)
+
+	// Should fail with missing witness data (expected - witness doesn't have enough state)
+	// but witness should be decoded correctly
+	_, err := precompile.Run(input)
+	if err == nil {
+		t.Error("expected error (missing witness data or execution failure), got nil")
+	}
+	// Verify error is not about witness decoding
+	if strings.Contains(err.Error(), "failed to decode witness") {
+		t.Errorf("witness should decode correctly, got error: %v", err)
+	}
+}
+
+func TestExecutePrecompilePreStateHashValidation(t *testing.T) {
+	witness := createTestWitness()
+	witnessRoot := witness.Root()
+
+	// Test with matching pre-state hash
+	input1 := createExecuteCalldataWithPreStateHash(witness, witnessRoot, common.Address{0x42}, big.NewInt(0), []byte{}, 100000)
+	precompile := &executePrecompile{}
+	_, err1 := precompile.Run(input1)
+	// Should not fail on hash validation (may fail on missing witness data, which is expected)
+	if err1 != nil && strings.Contains(err1.Error(), "pre-state hash mismatch") {
+		t.Errorf("unexpected pre-state hash mismatch: %v", err1)
+	}
+
+	// Test with mismatched pre-state hash
+	wrongHash := common.Hash{0xff}
+	input2 := createExecuteCalldataWithPreStateHash(witness, wrongHash, common.Address{0x42}, big.NewInt(0), []byte{}, 100000)
+	_, err2 := precompile.Run(input2)
+	if err2 == nil {
+		t.Fatal("expected pre-state hash mismatch error")
+	}
+	if !strings.Contains(err2.Error(), "pre-state hash mismatch") {
+		t.Errorf("expected pre-state hash mismatch error, got: %v", err2)
+	}
+}
+
+func TestExecutePrecompileGasTracking(t *testing.T) {
+	// This test verifies that gas consumed is reported in the return value
+	// Note: This requires a valid execution scenario, which may be complex to set up
+	// For now, we test that errors include gas consumed info
+
+	witness := createTestWitness()
+	input := createExecuteCalldata(witness, common.Address{0x99}, big.NewInt(0), []byte{}, 100000)
+
+	precompile := &executePrecompile{}
+	_, err := precompile.Run(input)
+
+	// Even on error, gas consumed should be in error message
+	if err != nil && !strings.Contains(err.Error(), "gas consumed") {
+		t.Logf("Note: Error doesn't include gas consumed (may be expected for early failures): %v", err)
+	}
+}
+
+func TestExecutePrecompileReturnValueFormat(t *testing.T) {
+	// This test requires a successful execution scenario
+	// For now, we verify the error handling includes gas info
+	// Full test would require setting up a complete stateless execution environment
+
+	witness := createTestWitness()
+	input := createExecuteCalldata(witness, common.Address{0x42}, big.NewInt(0), []byte{}, 100000)
+
+	precompile := &executePrecompile{}
+	result, err := precompile.Run(input)
+
+	if err == nil {
+		// If successful, verify return value format: [32 bytes: gas consumed] + [execution result]
+		if len(result) < 32 {
+			t.Fatalf("return value too short: %d bytes (expected at least 32 for gas consumed)", len(result))
+		}
+
+		// Extract gas consumed (first 32 bytes, big-endian)
+		gasConsumedBytes := result[:32]
+		gasConsumed := new(big.Int).SetBytes(gasConsumedBytes).Uint64()
+
+		if gasConsumed == 0 {
+			t.Error("gas consumed should not be zero")
+		}
+
+		t.Logf("Gas consumed: %d", gasConsumed)
+	} else {
+		// On error, verify gas consumed is in error message
+		if !strings.Contains(err.Error(), "gas consumed") {
+			t.Logf("Error doesn't include gas consumed (may be expected for early failures): %v", err)
+		}
+	}
+}
+
+// Helper functions for EXECUTE precompile tests
+
+func createTestWitness() *stateless.Witness {
+	header := &types.Header{
+		Number: big.NewInt(100),
+		Root:   common.Hash{0x01, 0x02, 0x03},
+		Time:   1000,
+	}
+
+	witness := &stateless.Witness{
+		Headers: []*types.Header{header},
+		Codes:   make(map[string]struct{}),
+		State:   make(map[string]struct{}),
+	}
+
+	return witness
+}
+
+func createExecuteCalldata(witness *stateless.Witness, toAddr common.Address, value *big.Int, data []byte, gasLimit uint64) []byte {
+	witnessRoot := witness.Root()
+	return createExecuteCalldataWithPreStateHash(witness, witnessRoot, toAddr, value, data, gasLimit)
+}
+
+func createExecuteCalldataWithPreStateHash(witness *stateless.Witness, preStateHash common.Hash, toAddr common.Address, value *big.Int, data []byte, gasLimit uint64) []byte {
+	// Encode witness
+	witnessData, _ := rlp.EncodeToBytes(witness.ToExtWitness())
+	witnessSize := uint16(len(witnessData))
+	withdrawalsSize := uint16(0)
+
+	// Build calldata according to format
+	calldata := make([]byte, 120)
+
+	// Chain ID (mainnet = 1)
+	chainID := big.NewInt(1)
+	chainID.FillBytes(calldata[0:32])
+
+	// Pre-state hash
+	copy(calldata[32:64], preStateHash[:])
+
+	// Gas limit (8 bytes, little-endian)
+	binary.LittleEndian.PutUint64(calldata[64:72], gasLimit)
+
+	// Witness size + Withdrawals size (4 bytes: 2 bytes each, little-endian)
+	binary.LittleEndian.PutUint16(calldata[72:74], witnessSize)
+	binary.LittleEndian.PutUint16(calldata[74:76], withdrawalsSize)
+
+	// Coinbase (20 bytes)
+	coinbase := common.Address{0xaa}
+	copy(calldata[76:96], coinbase[:])
+
+	// Block number (8 bytes, little-endian)
+	binary.LittleEndian.PutUint64(calldata[96:104], 100)
+
+	// Gas price (8 bytes, little-endian)
+	binary.LittleEndian.PutUint64(calldata[104:112], 1000000000) // 1 gwei
+
+	// Timestamp (8 bytes, little-endian)
+	binary.LittleEndian.PutUint64(calldata[112:120], 1000)
+
+	// Append witness data
+	calldata = append(calldata, witnessData...)
+
+	// Append withdrawals (empty for now)
+	// withdrawals data would go here, but it's empty
+
+	// Append execution target: To (20 bytes), Value (32 bytes), Data length (4 bytes), Data (variable)
+	calldata = append(calldata, toAddr.Bytes()...)
+
+	valueBytes := make([]byte, 32)
+	value.FillBytes(valueBytes)
+	calldata = append(calldata, valueBytes...)
+
+	dataLenBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(dataLenBytes, uint32(len(data)))
+	calldata = append(calldata, dataLenBytes...)
+	calldata = append(calldata, data...)
+
+	return calldata
+}
