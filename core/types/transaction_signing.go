@@ -227,12 +227,10 @@ func newModernSigner(chainID *big.Int, fork forks.Fork) Signer {
 	}
 	if fork >= forks.Cancun {
 		s.txtypes.set(BlobTxType)
+		s.txtypes.set(ExecuteTxType)
 	}
 	if fork >= forks.Prague {
 		s.txtypes.set(SetCodeTxType)
-	}
-	if fork >= forks.Osaka {
-		s.txtypes.set(ExecuteTxType)
 	}
 	return s
 }
@@ -293,6 +291,12 @@ func (s *modernSigner) SignatureValues(tx *Transaction, sig []byte) (R, S, V *bi
 	return R, S, V, nil
 }
 
+// NewOsakaSigner returns a signer that accepts ExecuteTx (type 0x05) in addition to
+// all transaction types supported by NewPragueSigner. Use when the chain has Osaka fork.
+func NewOsakaSigner(chainId *big.Int) Signer {
+	return newModernSigner(chainId, forks.Osaka)
+}
+
 // NewPragueSigner returns a signer that accepts
 // - EIP-7702 set code transactions
 // - EIP-4844 blob transactions
@@ -305,8 +309,9 @@ func NewPragueSigner(chainId *big.Int) Signer {
 }
 
 // NewCancunSigner returns a signer that accepts
-// - EIP-4844 blob transactions
-// - EIP-1559 dynamic fee transactions
+// - ExecuteTx (type 0x05) for native rollup batches,
+// - EIP-4844 blob transactions,
+// - EIP-1559 dynamic fee transactions,
 // - EIP-2930 access list transactions,
 // - EIP-155 replay protected transactions, and
 // - legacy Homestead transactions.

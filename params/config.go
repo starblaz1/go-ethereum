@@ -212,6 +212,8 @@ var (
 		Clique:                  nil,
 	}
 
+	// AllDevChainProtocolChanges uses Cancun as the activation fork (no Prague/Osaka).
+	// Suitable for native rollup devnets where ExecuteTx and Osaka features are not yet used.
 	AllDevChainProtocolChanges = &ChainConfig{
 		ChainID:                 big.NewInt(1337),
 		HomesteadBlock:          big.NewInt(0),
@@ -230,8 +232,8 @@ var (
 		ShanghaiTime:            newUint64(0),
 		CancunTime:              newUint64(0),
 		TerminalTotalDifficulty: big.NewInt(0),
-		PragueTime:              newUint64(0),
-		OsakaTime:               newUint64(0),
+		PragueTime:              nil,
+		OsakaTime:               nil,
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
@@ -299,8 +301,8 @@ var (
 		Clique:                  nil,
 	}
 
-	// MergedTestChainConfig contains every protocol change (EIPs) introduced
-	// and accepted by the Ethereum core developers for testing purposes.
+	// MergedTestChainConfig uses Cancun as the activation fork (no Prague/Osaka).
+	// Suitable for native rollup devnets where ExecuteTx and Osaka features are not yet used.
 	MergedTestChainConfig = &ChainConfig{
 		ChainID:                 big.NewInt(1),
 		HomesteadBlock:          big.NewInt(0),
@@ -321,8 +323,8 @@ var (
 		MergeNetsplitBlock:      big.NewInt(0),
 		ShanghaiTime:            newUint64(0),
 		CancunTime:              newUint64(0),
-		PragueTime:              newUint64(0),
-		OsakaTime:               newUint64(0),
+		PragueTime:              nil,
+		OsakaTime:               nil,
 		VerkleTime:              nil,
 		TerminalTotalDifficulty: big.NewInt(0),
 		Ethash:                  new(EthashConfig),

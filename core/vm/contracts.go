@@ -111,7 +111,8 @@ var PrecompiledContractsBerlin = PrecompiledContracts{
 }
 
 // PrecompiledContractsCancun contains the default set of pre-compiled Ethereum
-// contracts used in the Cancun release.
+// contracts used in the Cancun release, including the Execute precompile for
+// ExecuteTx (type 0x05).
 var PrecompiledContractsCancun = PrecompiledContracts{
 	common.BytesToAddress([]byte{0x1}): &ecrecover{},
 	common.BytesToAddress([]byte{0x2}): &sha256hash{},
@@ -123,6 +124,7 @@ var PrecompiledContractsCancun = PrecompiledContracts{
 	common.BytesToAddress([]byte{0x8}): &bn256PairingIstanbul{},
 	common.BytesToAddress([]byte{0x9}): &blake2F{},
 	common.BytesToAddress([]byte{0xa}): &kzgPointEvaluation{},
+	params.ExecutePrecompileAddress:   &executePrecompile{},
 }
 
 // PrecompiledContractsPrague contains the set of pre-compiled Ethereum
