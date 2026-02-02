@@ -30,9 +30,25 @@ import (
 var (
 	errExecuteWitnessSizeMismatch     = errors.New("execute tx witness size mismatch")
 	errExecuteWithdrawalsSizeMismatch = errors.New("execute tx withdrawals size mismatch")
+	errExecuteAnchorSizeMismatch      = errors.New("execute tx anchor size mismatch")
+	errExecuteBlobNotAllowed          = errors.New("execute tx: blob transactions not allowed per EIP-8079")
 )
 
-// ExecuteTx represents the typed transaction that targets the EXECUTE precompile.
+// ExecuteTx represents the typed transaction for Native Rollup state verification per EIP-8079.
+//
+// This transaction type enables stateless verification of L2 state transitions
+// on the L1 chain by exposing Ethereum's state transition function (STF) to rollups.
+//
+// Per EIP-8079, the EXECUTE precompile:
+//  1. Verifies state_transition(chain, block) from pre_state_root to post_state_root
+//  2. Performs anchoring via system transaction to ANCHOR_ADDRESS for L1->L2 messaging
+//  3. Rejects blob-carrying transactions within the execution
+//  4. Returns the execution result
+//
+// This enables L1 to trustlessly verify L2 state transitions without maintaining
+// the full L2 state - a key primitive for Native Rollups.
+//
+// See: EIP-8079 (https://eips.ethereum.org/EIPS/eip-8079)
 type ExecuteTx struct {
 	ChainID *uint256.Int
 	Nonce   uint64
@@ -43,17 +59,20 @@ type ExecuteTx struct {
 
 	To    *common.Address `rlp:"nil"`
 	Value *uint256.Int
-	Data  []byte
+	Data  []byte // Block/batch data to be executed
 
-	PreStateHash    common.Hash
-	WitnessSize     uint32
-	WithdrawalsSize uint32
-	Coinbase        common.Address
-	BlockNumber     uint64
-	Timestamp       uint64
-	Witness         []byte
-	Withdrawals     []byte
-	BlobHashes      []common.Hash
+	// Stateless execution fields per EIP-8079
+	PreStateHash    common.Hash    // Root of L2 state trie before execution
+	WitnessSize     uint32         // Size of witness data in bytes
+	WithdrawalsSize uint32         // Size of withdrawals data in bytes
+	AnchorSize      uint32         // Size of anchor data for L1->L2 messaging (EIP-8079)
+	Coinbase        common.Address // Block coinbase for execution context
+	BlockNumber     uint64         // Block number for execution context
+	Timestamp       uint64         // Block timestamp for execution context
+	Witness         []byte         // RLP-encoded stateless.ExtWitness
+	Withdrawals     []byte         // RLP-encoded withdrawals (if any)
+	Anchor          []byte         // Anchor data for L1->L2 messaging (EIP-8079)
+	BlobHashes      []common.Hash  // Blob hashes (must be empty per EIP-8079)
 
 	// Signature values
 	V *uint256.Int
@@ -61,6 +80,7 @@ type ExecuteTx struct {
 	S *uint256.Int
 }
 
+// executeTxRLP is the RLP encoding structure for ExecuteTx
 type executeTxRLP struct {
 	ChainID         *uint256.Int
 	Nonce           uint64
@@ -73,11 +93,13 @@ type executeTxRLP struct {
 	PreStateHash    common.Hash
 	WitnessSize     uint64
 	WithdrawalsSize uint64
+	AnchorSize      uint64
 	Coinbase        common.Address
 	BlockNumber     uint64
 	Timestamp       uint64
 	Witness         []byte
 	Withdrawals     []byte
+	Anchor          []byte
 	BlobHashes      []common.Hash
 	V               *uint256.Int
 	R               *uint256.Int
@@ -94,11 +116,13 @@ func (tx *ExecuteTx) copy() TxData {
 		PreStateHash:    tx.PreStateHash,
 		WitnessSize:     tx.WitnessSize,
 		WithdrawalsSize: tx.WithdrawalsSize,
+		AnchorSize:      tx.AnchorSize,
 		Coinbase:        tx.Coinbase,
 		BlockNumber:     tx.BlockNumber,
 		Timestamp:       tx.Timestamp,
 		Witness:         common.CopyBytes(tx.Witness),
 		Withdrawals:     common.CopyBytes(tx.Withdrawals),
+		Anchor:          common.CopyBytes(tx.Anchor),
 		BlobHashes:      make([]common.Hash, len(tx.BlobHashes)),
 		Value:           new(uint256.Int),
 		ChainID:         new(uint256.Int),
@@ -154,6 +178,7 @@ func (tx *ExecuteTx) to() *common.Address {
 	if tx.To != nil {
 		return copyAddressPtr(tx.To)
 	}
+	// ExecuteTx targets the EXECUTE precompile by default
 	addr := params.ExecutePrecompileAddress
 	return &addr
 }
@@ -193,11 +218,13 @@ func (tx *ExecuteTx) encode(b *bytes.Buffer) error {
 		PreStateHash:    tx.PreStateHash,
 		WitnessSize:     uint64(tx.WitnessSize),
 		WithdrawalsSize: uint64(tx.WithdrawalsSize),
+		AnchorSize:      uint64(tx.AnchorSize),
 		Coinbase:        tx.Coinbase,
 		BlockNumber:     tx.BlockNumber,
 		Timestamp:       tx.Timestamp,
 		Witness:         tx.Witness,
 		Withdrawals:     tx.Withdrawals,
+		Anchor:          tx.Anchor,
 		BlobHashes:      tx.BlobHashes,
 		V:               tx.V,
 		R:               tx.R,
@@ -221,21 +248,31 @@ func (tx *ExecuteTx) decode(input []byte) error {
 	tx.PreStateHash = dec.PreStateHash
 	tx.WitnessSize = uint32(dec.WitnessSize)
 	tx.WithdrawalsSize = uint32(dec.WithdrawalsSize)
+	tx.AnchorSize = uint32(dec.AnchorSize)
 	tx.Coinbase = dec.Coinbase
 	tx.BlockNumber = dec.BlockNumber
 	tx.Timestamp = dec.Timestamp
 	tx.Witness = dec.Witness
 	tx.Withdrawals = dec.Withdrawals
+	tx.Anchor = dec.Anchor
 	tx.BlobHashes = dec.BlobHashes
 	tx.V = ensureUint256(dec.V)
 	tx.R = ensureUint256(dec.R)
 	tx.S = ensureUint256(dec.S)
 
+	// Validate sizes
 	if uint64(len(tx.Witness)) != uint64(tx.WitnessSize) {
 		return errExecuteWitnessSizeMismatch
 	}
 	if uint64(len(tx.Withdrawals)) != uint64(tx.WithdrawalsSize) {
 		return errExecuteWithdrawalsSizeMismatch
+	}
+	if uint64(len(tx.Anchor)) != uint64(tx.AnchorSize) {
+		return errExecuteAnchorSizeMismatch
+	}
+	// Per EIP-8079: blob transactions are not allowed in EXECUTE
+	if len(tx.BlobHashes) > 0 {
+		return errExecuteBlobNotAllowed
 	}
 	return nil
 }
@@ -255,16 +292,19 @@ func (tx *ExecuteTx) sigHash(chainID *big.Int) common.Hash {
 			tx.PreStateHash,
 			tx.WitnessSize,
 			tx.WithdrawalsSize,
+			tx.AnchorSize,
 			tx.Coinbase,
 			tx.BlockNumber,
 			tx.Timestamp,
 			tx.Witness,
 			tx.Withdrawals,
+			tx.Anchor,
 			tx.BlobHashes,
 		},
 	)
 }
 
+// ensureUint256 returns a non-nil uint256.Int (zero if input is nil)
 func ensureUint256(v *uint256.Int) *uint256.Int {
 	if v == nil {
 		return new(uint256.Int)

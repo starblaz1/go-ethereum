@@ -50,7 +50,7 @@ const (
 	DynamicFeeTxType = 0x02
 	BlobTxType       = 0x03
 	SetCodeTxType    = 0x04
-	ExecuteTxType    = 0x05
+	ExecuteTxType      = 0x05 // Native Rollup state proof transaction
 )
 
 // Transaction is an Ethereum transaction.
@@ -523,23 +523,27 @@ func (tx *Transaction) SetCodeAuthorizations() []SetCodeAuthorization {
 	return setcodetx.AuthList
 }
 
-// ExecutePayload is a helper struct exposing the EXECUTE-specific data.
+// ExecutePayload is a helper struct exposing the EXECUTE transaction-specific data per EIP-8079.
+// This contains all data needed for stateless verification of L2 state transitions.
 type ExecutePayload struct {
-	PreStateHash    common.Hash
-	WitnessSize     uint32
-	WithdrawalsSize uint32
-	Coinbase        common.Address
-	BlockNumber     uint64
-	Timestamp       uint64
-	To              *common.Address
-	Value           *big.Int
-	Data            []byte
-	Witness         []byte
-	Withdrawals     []byte
-	BlobHashes      []common.Hash
+	PreStateHash    common.Hash     // Root of L2 state trie before batch execution
+	WitnessSize     uint32          // Size of witness data in bytes
+	WithdrawalsSize uint32          // Size of withdrawals data in bytes
+	AnchorSize      uint32          // Size of anchor data for L1->L2 messaging (EIP-8079)
+	Coinbase        common.Address  // Block coinbase for execution context
+	BlockNumber     uint64          // Block number for execution context
+	Timestamp       uint64          // Block timestamp for execution context
+	To              *common.Address // Target address (nil for EXECUTE precompile)
+	Value           *big.Int        // Value transferred
+	Data            []byte          // Block/batch data to be executed
+	Witness         []byte          // RLP-encoded stateless.ExtWitness
+	Withdrawals     []byte          // RLP-encoded withdrawals
+	Anchor          []byte          // Anchor data for L1->L2 messaging (EIP-8079)
+	BlobHashes      []common.Hash   // Blob hashes (must be empty per EIP-8079)
 }
 
 // ExecutePayload returns the EXECUTE-specific payload if the transaction is of ExecuteTxType.
+// Returns nil for non-ExecuteTx transactions.
 func (tx *Transaction) ExecutePayload() *ExecutePayload {
 	exectx, ok := tx.inner.(*ExecuteTx)
 	if !ok {
@@ -549,6 +553,7 @@ func (tx *Transaction) ExecutePayload() *ExecutePayload {
 		PreStateHash:    exectx.PreStateHash,
 		WitnessSize:     exectx.WitnessSize,
 		WithdrawalsSize: exectx.WithdrawalsSize,
+		AnchorSize:      exectx.AnchorSize,
 		Coinbase:        exectx.Coinbase,
 		BlockNumber:     exectx.BlockNumber,
 		Timestamp:       exectx.Timestamp,
@@ -562,6 +567,7 @@ func (tx *Transaction) ExecutePayload() *ExecutePayload {
 	payload.Data = common.CopyBytes(exectx.Data)
 	payload.Witness = common.CopyBytes(exectx.Witness)
 	payload.Withdrawals = common.CopyBytes(exectx.Withdrawals)
+	payload.Anchor = common.CopyBytes(exectx.Anchor)
 	payload.BlobHashes = make([]common.Hash, len(exectx.BlobHashes))
 	copy(payload.BlobHashes, exectx.BlobHashes)
 	return payload
