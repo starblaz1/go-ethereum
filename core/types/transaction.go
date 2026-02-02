@@ -442,6 +442,11 @@ func (tx *Transaction) BlobHashes() []common.Hash {
 		return blobtx.BlobHashes
 	}
 	if exectx, ok := tx.inner.(*ExecuteTx); ok {
+		// Return nil if BlobHashes is empty to avoid state transition error
+		// (state_transition.go checks for non-nil empty BlobHashes)
+		if len(exectx.BlobHashes) == 0 {
+			return nil
+		}
 		return exectx.BlobHashes
 	}
 	return nil
