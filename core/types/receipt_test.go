@@ -368,6 +368,109 @@ func TestReceiptJSON(t *testing.T) {
 	}
 }
 
+// TestReceiptChainIDDeriveFields verifies that DeriveFields sets receipt.ChainID for
+// ExecuteTx (native rollup) and leaves it nil for L1 transaction types.
+func TestReceiptChainIDDeriveFields(t *testing.T) {
+	basefee := big.NewInt(1000)
+	signer := LatestSignerForChainID(big.NewInt(1))
+	blockHash := common.HexToHash("0xdeadbeef")
+	blockNum := uint64(1)
+	blockTime := uint64(2)
+
+	// ExecuteTx with ChainID set (native rollup) -> receipt should get ChainID.
+	rollupChainID := uint256.NewInt(12345)
+	executeTx := NewTx(&ExecuteTx{
+		ChainID:   rollupChainID,
+		Nonce:     0,
+		GasTipCap: uint256.NewInt(10),
+		GasFeeCap: uint256.NewInt(1000),
+		Gas:       21000,
+		To:        nil,
+		Value:     uint256.NewInt(0),
+		Data:      nil,
+	})
+	rExecute := &Receipt{
+		Type:              ExecuteTxType,
+		Status:             ReceiptStatusSuccessful,
+		CumulativeGasUsed:  21000,
+		Logs:               []*Log{},
+	}
+	rExecute.DeriveFields(signer, DeriveReceiptContext{
+		BlockHash: blockHash, BlockNumber: blockNum, BlockTime: blockTime,
+		TxIndex: 0, GasUsed: 21000, BaseFee: basefee, Tx: executeTx,
+	})
+	if rExecute.ChainID == nil || rExecute.ChainID.Cmp(big.NewInt(12345)) != 0 {
+		t.Fatalf("ExecuteTx receipt: want ChainID 12345, got %v", rExecute.ChainID)
+	}
+
+	// Legacy (L1) tx -> receipt.ChainID should be nil.
+	legacyTx := NewTx(&LegacyTx{
+		Nonce:    0,
+		Value:    big.NewInt(0),
+		Gas:      21000,
+		GasPrice: big.NewInt(100),
+	})
+	rLegacy := &Receipt{
+		Type:              LegacyTxType,
+		Status:             ReceiptStatusSuccessful,
+		CumulativeGasUsed: 21000,
+		Logs:               []*Log{},
+	}
+	rLegacy.DeriveFields(signer, DeriveReceiptContext{
+		BlockHash: blockHash, BlockNumber: blockNum, BlockTime: blockTime,
+		TxIndex: 0, GasUsed: 21000, BaseFee: basefee, Tx: legacyTx,
+	})
+	if rLegacy.ChainID != nil {
+		t.Fatalf("Legacy receipt: want ChainID nil, got %v", rLegacy.ChainID)
+	}
+}
+
+// TestReceiptChainIDJSON verifies that receipt.ChainID round-trips in JSON
+// (present for native-rollup receipts, omitted when nil).
+func TestReceiptChainIDJSON(t *testing.T) {
+	// With ChainID set (e.g. native rollup receipt).
+	rWith := &Receipt{
+		Type:              ExecuteTxType,
+		Status:             ReceiptStatusSuccessful,
+		CumulativeGasUsed: 1,
+		Logs:              []*Log{},
+		ChainID:           big.NewInt(999),
+	}
+	rWith.Bloom = CreateBloom(rWith)
+	b, err := rWith.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded Receipt
+	if err := decoded.UnmarshalJSON(b); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.ChainID == nil || decoded.ChainID.Cmp(big.NewInt(999)) != 0 {
+		t.Fatalf("round-trip with chainId: want 999, got %v", decoded.ChainID)
+	}
+
+	// With ChainID nil (L1) -> should remain nil and omit from JSON.
+	rNil := &Receipt{
+		Type:              LegacyTxType,
+		Status:             ReceiptStatusSuccessful,
+		CumulativeGasUsed: 1,
+		Logs:              []*Log{},
+		ChainID:           nil,
+	}
+	rNil.Bloom = CreateBloom(rNil)
+	b, err = rNil.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	decoded = Receipt{}
+	if err := decoded.UnmarshalJSON(b); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.ChainID != nil {
+		t.Fatalf("round-trip without chainId: want nil, got %v", decoded.ChainID)
+	}
+}
+
 // Test we can still parse receipt without EffectiveGasPrice for backwards compatibility, even
 // though it is required per the spec.
 func TestEffectiveGasPriceNotRequired(t *testing.T) {
@@ -532,6 +635,7 @@ func clearComputedFieldsOnReceipt(receipt *Receipt) *Receipt {
 	cpy.EffectiveGasPrice = big.NewInt(0)
 	cpy.BlobGasUsed = 0
 	cpy.BlobGasPrice = nil
+	cpy.ChainID = nil
 	cpy.Bloom = CreateBloom(&cpy)
 	return &cpy
 }

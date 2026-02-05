@@ -201,6 +201,12 @@ func MakeReceipt(evm *vm.EVM, result *ExecutionResult, statedb *state.StateDB, b
 	receipt.BlockHash = blockHash
 	receipt.BlockNumber = blockNumber
 	receipt.TransactionIndex = uint(statedb.TxIndex())
+	// Native-rollup receipts (ExecuteTx) carry the tx's chain id; L1 receipts have nil.
+	if tx.Type() == types.ExecuteTxType {
+		if cid := tx.ChainId(); cid != nil {
+			receipt.ChainID = new(big.Int).Set(cid)
+		}
+	}
 	return receipt
 }
 

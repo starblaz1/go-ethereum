@@ -233,7 +233,10 @@ type extblock struct {
 //
 // The receipt's bloom must already calculated for the block's bloom to be
 // correctly calculated.
-func NewBlock(header *Header, body *Body, receipts []*Receipt, hasher ListHasher) *Block {
+//
+// When receiptHash is non-nil (e.g. EIP-6466 SSZ receipts root), it is used
+// as the block's ReceiptHash instead of deriving from RLP trie.
+func NewBlock(header *Header, body *Body, receipts []*Receipt, hasher ListHasher, receiptHash *common.Hash) *Block {
 	if body == nil {
 		body = &Body{}
 	}
@@ -254,6 +257,12 @@ func NewBlock(header *Header, body *Body, receipts []*Receipt, hasher ListHasher
 
 	if len(receipts) == 0 {
 		b.header.ReceiptHash = EmptyReceiptsHash
+	} else if receiptHash != nil {
+		b.header.ReceiptHash = *receiptHash
+		// Receipts must go through MakeReceipt to calculate the receipt's bloom
+		// already. Merge the receipt's bloom together instead of recalculating
+		// everything.
+		b.header.Bloom = MergeBloom(receipts)
 	} else {
 		b.header.ReceiptHash = DeriveSha(Receipts(receipts), hasher)
 		// Receipts must go through MakeReceipt to calculate the receipt's bloom

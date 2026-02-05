@@ -1526,7 +1526,7 @@ func TestBlockToPayloadWithBlobs(t *testing.T) {
 	sidecar := types.NewBlobTxSidecar(types.BlobSidecarVersion0, make([]kzg4844.Blob, 1), make([]kzg4844.Commitment, 1), make([]kzg4844.Proof, 1))
 	sidecars := []*types.BlobTxSidecar{sidecar}
 
-	block := types.NewBlock(&header, &types.Body{Transactions: txs}, nil, trie.NewStackTrie(nil))
+	block := types.NewBlock(&header, &types.Body{Transactions: txs}, nil, trie.NewStackTrie(nil), nil)
 	envelope := engine.BlockToExecutableData(block, nil, sidecars, nil)
 	var want int
 	for _, tx := range txs {

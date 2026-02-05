@@ -74,7 +74,16 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 		return common.Hash{}, common.Hash{}, err
 	}
 	// Almost everything validated, but receipt and state root needs to be returned
-	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
+	var receiptRoot common.Hash
+	if config.IsSSZReceipts(block.Number(), block.Time()) {
+		var err error
+		receiptRoot, err = types.ReceiptsSSZRoot(res.Receipts, block.Transactions(), types.MakeSigner(config, block.Number(), block.Time()))
+		if err != nil {
+			return common.Hash{}, common.Hash{}, err
+		}
+	} else {
+		receiptRoot = types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
+	}
 	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
 	return stateRoot, receiptRoot, nil
 }

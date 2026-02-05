@@ -521,8 +521,17 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 	// Assign the final state root to header.
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 
-	// Header seems complete, assemble into a block and return
-	return types.NewBlock(header, &types.Body{Transactions: body.Transactions, Uncles: body.Uncles}, receipts, trie.NewStackTrie(nil)), nil
+	// Header seems complete, assemble into a block and return.
+	// When EIP-6466 (SSZ receipts) is active, pass the SSZ receipt root.
+	var receiptHash *common.Hash
+	if chain.Config().IsSSZReceipts(header.Number, header.Time) {
+		root, err := types.ReceiptsSSZRoot(receipts, body.Transactions, types.MakeSigner(chain.Config(), header.Number, header.Time))
+		if err != nil {
+			return nil, err
+		}
+		receiptHash = &root
+	}
+	return types.NewBlock(header, &types.Body{Transactions: body.Transactions, Uncles: body.Uncles}, receipts, trie.NewStackTrie(nil), receiptHash), nil
 }
 
 // SealHash returns the hash of a block prior to it being sealed.

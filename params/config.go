@@ -467,8 +467,9 @@ type ChainConfig struct {
 	BPO3Time      *uint64 `json:"bpo3Time,omitempty"`      // BPO3 switch time (nil = no fork, 0 = already on bpo3)
 	BPO4Time      *uint64 `json:"bpo4Time,omitempty"`      // BPO4 switch time (nil = no fork, 0 = already on bpo4)
 	BPO5Time      *uint64 `json:"bpo5Time,omitempty"`      // BPO5 switch time (nil = no fork, 0 = already on bpo5)
-	AmsterdamTime *uint64 `json:"amsterdamTime,omitempty"` // Amsterdam switch time (nil = no fork, 0 = already on amsterdam)
-	VerkleTime    *uint64 `json:"verkleTime,omitempty"`    // Verkle switch time (nil = no fork, 0 = already on verkle)
+	AmsterdamTime   *uint64 `json:"amsterdamTime,omitempty"`   // Amsterdam switch time (nil = no fork, 0 = already on amsterdam)
+	VerkleTime      *uint64 `json:"verkleTime,omitempty"`      // Verkle switch time (nil = no fork, 0 = already on verkle)
+	SSZReceiptsTime *uint64 `json:"sszReceiptsTime,omitempty"` // EIP-6466 SSZ receipts switch time (nil = no fork)
 
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
@@ -599,6 +600,9 @@ func (c *ChainConfig) String() string {
 	}
 	if c.VerkleTime != nil {
 		result += fmt.Sprintf(", VerkleTime: %v", *c.VerkleTime)
+	}
+	if c.SSZReceiptsTime != nil {
+		result += fmt.Sprintf(", SSZReceiptsTime: %v", *c.SSZReceiptsTime)
 	}
 	result += "}"
 	return result
@@ -873,6 +877,12 @@ func (c *ChainConfig) IsVerkle(num *big.Int, time uint64) bool {
 	return c.IsLondon(num) && isTimestampForked(c.VerkleTime, time)
 }
 
+// IsSSZReceipts returns whether EIP-6466 (SSZ receipts) is active at the given time.
+// When true, receipts_root is the SSZ hash_tree_root of the receipt list instead of the MPT root.
+func (c *ChainConfig) IsSSZReceipts(num *big.Int, time uint64) bool {
+	return c.IsLondon(num) && isTimestampForked(c.SSZReceiptsTime, time)
+}
+
 // IsVerkleGenesis checks whether the verkle fork is activated at the genesis block.
 //
 // Verkle mode is considered enabled if the verkle fork time is configured,
@@ -948,6 +958,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		{name: "pragueTime", timestamp: c.PragueTime, optional: true},
 		{name: "osakaTime", timestamp: c.OsakaTime, optional: true},
 		{name: "verkleTime", timestamp: c.VerkleTime, optional: true},
+		{name: "sszReceiptsTime", timestamp: c.SSZReceiptsTime, optional: true},
 		{name: "bpo1", timestamp: c.BPO1Time, optional: true},
 		{name: "bpo2", timestamp: c.BPO2Time, optional: true},
 		{name: "bpo3", timestamp: c.BPO3Time, optional: true},
@@ -1108,6 +1119,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	}
 	if isForkTimestampIncompatible(c.VerkleTime, newcfg.VerkleTime, headTimestamp) {
 		return newTimestampCompatError("Verkle fork timestamp", c.VerkleTime, newcfg.VerkleTime)
+	}
+	if isForkTimestampIncompatible(c.SSZReceiptsTime, newcfg.SSZReceiptsTime, headTimestamp) {
+		return newTimestampCompatError("SSZ receipts fork timestamp", c.SSZReceiptsTime, newcfg.SSZReceiptsTime)
 	}
 	if isForkTimestampIncompatible(c.BPO1Time, newcfg.BPO1Time, headTimestamp) {
 		return newTimestampCompatError("BPO1 fork timestamp", c.BPO1Time, newcfg.BPO1Time)
