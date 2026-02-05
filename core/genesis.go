@@ -548,7 +548,7 @@ func (g *Genesis) toBlockWithRoot(root common.Hash) *types.Block {
 			head.RequestsHash = &types.EmptyRequestsHash
 		}
 	}
-	return types.NewBlock(head, &types.Body{Withdrawals: withdrawals}, nil, trie.NewStackTrie(nil), nil)
+	return types.NewBlock(head, &types.Body{Withdrawals: withdrawals}, nil, trie.NewStackTrie(nil))
 }
 
 // Commit writes the block and state of a genesis specification to the database.

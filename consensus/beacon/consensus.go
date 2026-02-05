@@ -364,16 +364,8 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 	// Assign the final state root to header.
 	header.Root = state.IntermediateRoot(true)
 
-	// Assemble the final block. When EIP-6466 (SSZ receipts) is active, pass the SSZ receipt root.
-	var receiptHash *common.Hash
-	if chain.Config().IsSSZReceipts(header.Number, header.Time) {
-		root, err := types.ReceiptsSSZRoot(receipts, body.Transactions, types.MakeSigner(chain.Config(), header.Number, header.Time))
-		if err != nil {
-			return nil, err
-		}
-		receiptHash = &root
-	}
-	return types.NewBlock(header, body, receipts, trie.NewStackTrie(nil), receiptHash), nil
+	// Assemble the final block.
+	return types.NewBlock(header, body, receipts, trie.NewStackTrie(nil)), nil
 }
 
 // Seal generates a new sealing request for the given input block and pushes

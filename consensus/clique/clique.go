@@ -590,16 +590,7 @@ func (c *Clique) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 
 	// Assemble and return the final block for sealing.
-	// When EIP-6466 (SSZ receipts) is active, pass the SSZ receipt root.
-	var receiptHash *common.Hash
-	if chain.Config().IsSSZReceipts(header.Number, header.Time) {
-		root, err := types.ReceiptsSSZRoot(receipts, body.Transactions, types.MakeSigner(chain.Config(), header.Number, header.Time))
-		if err != nil {
-			return nil, err
-		}
-		receiptHash = &root
-	}
-	return types.NewBlock(header, &types.Body{Transactions: body.Transactions}, receipts, trie.NewStackTrie(nil), receiptHash), nil
+	return types.NewBlock(header, &types.Body{Transactions: body.Transactions}, receipts, trie.NewStackTrie(nil)), nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks

@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -147,17 +146,7 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	if stateless {
 		return nil
 	}
-	// The receipt root: EIP-6466 SSZ hash_tree_root when active, else MPT trie root
-	var receiptSha common.Hash
-	if v.config.IsSSZReceipts(block.Number(), block.Time()) {
-		var err error
-		receiptSha, err = types.ReceiptsSSZRoot(res.Receipts, block.Transactions(), types.MakeSigner(v.config, block.Number(), block.Time()))
-		if err != nil {
-			return fmt.Errorf("invalid SSZ receipts: %w", err)
-		}
-	} else {
-		receiptSha = types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
-	}
+	receiptSha := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
 	if receiptSha != header.ReceiptHash {
 		return fmt.Errorf("invalid receipt root hash (remote: %x local: %x)", header.ReceiptHash, receiptSha)
 	}
