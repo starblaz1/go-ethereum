@@ -288,6 +288,16 @@ func (indexer *txIndexer) report(head uint64, tail *uint64) TxIndexProgress {
 			Remaining: 0,
 		}
 	}
+	// Special case: at genesis (head=0) with no tail yet, consider it done.
+	// Genesis block typically has no transactions to index, and reporting
+	// "1 remaining" at genesis causes consensus clients to think the EL
+	// is not synced, blocking block production on fresh PoS chains.
+	if head == 0 && tail == nil {
+		return TxIndexProgress{
+			Indexed:   0,
+			Remaining: 0,
+		}
+	}
 	// Compute how many blocks are supposed to be indexed
 	total := indexer.limit
 	if indexer.limit == 0 || total > head {
