@@ -98,6 +98,11 @@ type Header struct {
 
 	// RequestsHash was added by EIP-7685 and is ignored in legacy headers.
 	RequestsHash *common.Hash `json:"requestsHash" rlp:"optional"`
+
+	// BurnedFees was added by EIP-8079 (Native Rollups) and is ignored in legacy headers.
+	// Represents total native tokens burned in the current block as part of the base fee.
+	// Enables native rollups to collect base fees instead of burning them.
+	BurnedFees *uint64 `json:"burnedFees" rlp:"optional"`
 }
 
 // field type overrides for gencodec
@@ -112,6 +117,7 @@ type headerMarshaling struct {
 	Hash          common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
 	BlobGasUsed   *hexutil.Uint64
 	ExcessBlobGas *hexutil.Uint64
+	BurnedFees    *hexutil.Uint64 // EIP-8079: Native Rollups
 }
 
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
@@ -227,6 +233,7 @@ type extblock struct {
 //
 // The receipt's bloom must already calculated for the block's bloom to be
 // correctly calculated.
+//
 func NewBlock(header *Header, body *Body, receipts []*Receipt, hasher ListHasher) *Block {
 	if body == nil {
 		body = &Body{}

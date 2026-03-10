@@ -213,6 +213,45 @@ There are three different solutions depending on your use case:
   * If you want a convenient single node environment for testing, you can use our [Dev Mode](https://geth.ethereum.org/docs/developers/dapp-developer/dev-mode).
   * If you are looking for a multiple node test network, you can set one up quite easily with [Kurtosis](https://geth.ethereum.org/docs/fundamentals/kurtosis).
 
+## EIP-8079: Native Rollup Support
+
+This fork implements [EIP-8079](https://eips.ethereum.org/EIPS/eip-8079) for Native Rollup 
+state verification. EIP-8079 exposes Ethereum's state transition function (STF) to the 
+execution layer via the `EXECUTE` precompile, enabling EVM-equivalent rollups to inherit 
+full Ethereum L1 security without maintaining complex proof systems.
+
+### ExecuteTx Transaction Type
+
+ExecuteTx (transaction type 0x05) contains:
+- **Pre-state hash**: Root of the L2 state trie before execution
+- **Witness**: RLP-encoded stateless.ExtWitness (headers, code, state nodes)
+- **Anchor**: Data for L1→L2 messaging (injected to `ANCHOR_ADDRESS`)
+- **Block context**: Coinbase, block number, timestamp
+- **Block data**: The L2 block/batch to be executed
+
+### EXECUTE Precompile (EIP-8079)
+
+The EXECUTE precompile at address `0x12` verifies Native Rollup state transitions:
+
+1. Parses the block and witness data
+2. Performs anchoring via system transaction to `ANCHOR_ADDRESS` for L1→L2 messaging
+3. Rejects blob-carrying transactions (per EIP-8079)
+4. Executes `state_transition(chain, block)` statelessly
+5. Returns execution result
+
+### Header Extension (EIP-8079)
+
+The block header includes a new `burned_fees` field representing total native tokens 
+burned as base fee. This enables native rollups to collect base fees instead of burning them.
+
+### Related Files
+
+- `core/types/tx_execute.go` - ExecuteTx transaction type definition
+- `core/types/block.go` - Header with `BurnedFees` field
+- `core/state_transition.go` - ExecuteTx calldata encoding
+- `core/vm/contracts.go` - EXECUTE precompile implementation
+- `params/protocol_params.go` - ExecutePrecompileAddress, AnchorAddress constants
+
 ## Contribution
 
 Thank you for considering helping out with the source code! We welcome contributions

@@ -18,6 +18,7 @@ package core
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"math/big"
@@ -174,6 +175,14 @@ type Message struct {
 
 // TransactionToMessage converts a transaction into a Message.
 func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.Int) (*Message, error) {
+	// For ExecuteTx, encode all fields into call data for the EXECUTE precompile
+	var data []byte
+	if tx.Type() == types.ExecuteTxType {
+		data = encodeExecuteTxCalldata(tx, baseFee)
+	} else {
+		data = tx.Data()
+	}
+
 	msg := &Message{
 		Nonce:                 tx.Nonce(),
 		GasLimit:              tx.Gas(),
@@ -182,7 +191,7 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 		GasTipCap:             new(big.Int).Set(tx.GasTipCap()),
 		To:                    tx.To(),
 		Value:                 tx.Value(),
-		Data:                  tx.Data(),
+		Data:                  data,
 		AccessList:            tx.AccessList(),
 		SetCodeAuthorizations: tx.SetCodeAuthorizations(),
 		SkipNonceChecks:       false,
@@ -200,6 +209,146 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 	var err error
 	msg.From, err = types.Sender(s, tx)
 	return msg, err
+}
+
+// encodeExecuteTxCalldata encodes all ExecuteTx fields into the call data format
+// expected by the EXECUTE precompile for Native Rollup state verification per EIP-8079.
+//
+// Format:
+//   - ChainID (32 bytes, big-endian padded)
+//   - PreStateHash (32 bytes)
+//   - GasLimit (8 bytes, little-endian)
+//   - WitnessSize (2 bytes) + WithdrawalsSize (2 bytes) + AnchorSize (2 bytes) + Reserved (2 bytes)
+//   - Coinbase (20 bytes)
+//   - BlockNumber (8 bytes, little-endian)
+//   - GasPrice (8 bytes, little-endian)
+//   - Timestamp (8 bytes, little-endian)
+//   - Witness (WitnessSize bytes)
+//   - Withdrawals (WithdrawalsSize bytes)
+//   - Anchor (AnchorSize bytes) - for L1->L2 messaging per EIP-8079
+//   - To (20 bytes)
+//   - Value (32 bytes, big-endian)
+//   - DataLength (4 bytes, little-endian)
+//   - Data (DataLength bytes)
+func encodeExecuteTxCalldata(tx *types.Transaction, baseFee *big.Int) []byte {
+	payload := tx.ExecutePayload()
+	if payload == nil {
+		return tx.Data() // Fallback if not ExecuteTx
+	}
+
+	// Calculate effective gas price
+	gasPrice := uint64(0)
+	if baseFee != nil {
+		effectiveGasPrice := new(big.Int).Add(tx.GasTipCap(), baseFee)
+		if effectiveGasPrice.Cmp(tx.GasFeeCap()) > 0 {
+			effectiveGasPrice = tx.GasFeeCap()
+		}
+		gasPrice = effectiveGasPrice.Uint64()
+	}
+
+	// Pre-calculate total size
+	witnessSize := uint16(len(payload.Witness))
+	withdrawalsSize := uint16(len(payload.Withdrawals))
+	anchorSize := uint16(len(payload.Anchor))
+	dataSize := uint32(len(payload.Data))
+
+	// Per EIP-8079: BlobHashes are not allowed in EXECUTE
+	totalSize := 32 + // ChainID
+		32 + // PreStateHash
+		8 + // GasLimit
+		8 + // WitnessSize + WithdrawalsSize + AnchorSize + Reserved
+		20 + // Coinbase
+		8 + // BlockNumber
+		8 + // GasPrice
+		8 + // Timestamp
+		int(witnessSize) +
+		int(withdrawalsSize) +
+		int(anchorSize) +
+		20 + // To
+		32 + // Value
+		4 + // DataLength
+		int(dataSize)
+
+	buf := make([]byte, totalSize)
+	offset := 0
+
+	// ChainID (32 bytes, big-endian padded)
+	chainID := tx.ChainId()
+	chainIDBytes := make([]byte, 32)
+	if chainID != nil {
+		chainID.FillBytes(chainIDBytes)
+	}
+	copy(buf[offset:], chainIDBytes)
+	offset += 32
+
+	// PreStateHash (32 bytes)
+	copy(buf[offset:], payload.PreStateHash[:])
+	offset += 32
+
+	// GasLimit (8 bytes, little-endian)
+	binary.LittleEndian.PutUint64(buf[offset:], tx.Gas())
+	offset += 8
+
+	// WitnessSize (2 bytes) + WithdrawalsSize (2 bytes) + AnchorSize (2 bytes) + Reserved (2 bytes)
+	binary.LittleEndian.PutUint16(buf[offset:], witnessSize)
+	offset += 2
+	binary.LittleEndian.PutUint16(buf[offset:], withdrawalsSize)
+	offset += 2
+	binary.LittleEndian.PutUint16(buf[offset:], anchorSize)
+	offset += 2
+	binary.LittleEndian.PutUint16(buf[offset:], 0) // Reserved for future use
+	offset += 2
+
+	// Coinbase (20 bytes)
+	copy(buf[offset:], payload.Coinbase[:])
+	offset += 20
+
+	// BlockNumber (8 bytes, little-endian)
+	binary.LittleEndian.PutUint64(buf[offset:], payload.BlockNumber)
+	offset += 8
+
+	// GasPrice (8 bytes, little-endian)
+	binary.LittleEndian.PutUint64(buf[offset:], gasPrice)
+	offset += 8
+
+	// Timestamp (8 bytes, little-endian)
+	binary.LittleEndian.PutUint64(buf[offset:], payload.Timestamp)
+	offset += 8
+
+	// Witness (variable)
+	copy(buf[offset:], payload.Witness)
+	offset += int(witnessSize)
+
+	// Withdrawals (variable)
+	copy(buf[offset:], payload.Withdrawals)
+	offset += int(withdrawalsSize)
+
+	// Anchor (variable) - for L1->L2 messaging per EIP-8079
+	copy(buf[offset:], payload.Anchor)
+	offset += int(anchorSize)
+
+	// To address (20 bytes)
+	if payload.To != nil {
+		copy(buf[offset:], payload.To[:])
+	}
+	offset += 20
+
+	// Value (32 bytes, big-endian)
+	valueBytes := make([]byte, 32)
+	if payload.Value != nil {
+		payload.Value.FillBytes(valueBytes)
+	}
+	copy(buf[offset:], valueBytes)
+	offset += 32
+
+	// DataLength (4 bytes, little-endian)
+	binary.LittleEndian.PutUint32(buf[offset:], dataSize)
+	offset += 4
+
+	// Data (variable)
+	copy(buf[offset:], payload.Data)
+
+	return buf
 }
 
 // ApplyMessage computes the new state by applying the given message

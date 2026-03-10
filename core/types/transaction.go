@@ -50,6 +50,7 @@ const (
 	DynamicFeeTxType = 0x02
 	BlobTxType       = 0x03
 	SetCodeTxType    = 0x04
+	ExecuteTxType      = 0x05 // Native Rollup state proof transaction
 )
 
 // Transaction is an Ethereum transaction.
@@ -212,6 +213,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		inner = new(BlobTx)
 	case SetCodeTxType:
 		inner = new(SetCodeTx)
+	case ExecuteTxType:
+		inner = new(ExecuteTx)
 	default:
 		return nil, ErrTxTypeNotSupported
 	}
@@ -438,6 +441,14 @@ func (tx *Transaction) BlobHashes() []common.Hash {
 	if blobtx, ok := tx.inner.(*BlobTx); ok {
 		return blobtx.BlobHashes
 	}
+	if exectx, ok := tx.inner.(*ExecuteTx); ok {
+		// Return nil if BlobHashes is empty to avoid state transition error
+		// (state_transition.go checks for non-nil empty BlobHashes)
+		if len(exectx.BlobHashes) == 0 {
+			return nil
+		}
+		return exectx.BlobHashes
+	}
 	return nil
 }
 
@@ -510,6 +521,56 @@ func (tx *Transaction) SetCodeAuthorizations() []SetCodeAuthorization {
 		return nil
 	}
 	return setcodetx.AuthList
+}
+
+// ExecutePayload is a helper struct exposing the EXECUTE transaction-specific data per EIP-8079.
+// This contains all data needed for stateless verification of L2 state transitions.
+type ExecutePayload struct {
+	PreStateHash    common.Hash     // Root of L2 state trie before batch execution
+	WitnessSize     uint32          // Size of witness data in bytes
+	WithdrawalsSize uint32          // Size of withdrawals data in bytes
+	AnchorSize      uint32          // Size of anchor data for L1->L2 messaging (EIP-8079)
+	Coinbase        common.Address  // Block coinbase for execution context
+	BlockNumber     uint64          // Block number for execution context
+	Timestamp       uint64          // Block timestamp for execution context
+	To              *common.Address // Target address (nil for EXECUTE precompile)
+	Value           *big.Int        // Value transferred
+	Data            []byte          // Block/batch data to be executed
+	Witness         []byte          // RLP-encoded stateless.ExtWitness
+	Withdrawals     []byte          // RLP-encoded withdrawals
+	Anchor          []byte          // Anchor data for L1->L2 messaging (EIP-8079)
+	BlobHashes      []common.Hash   // Blob hashes (must be empty per EIP-8079)
+}
+
+// ExecutePayload returns the EXECUTE-specific payload if the transaction is of ExecuteTxType.
+// Returns nil for non-ExecuteTx transactions.
+func (tx *Transaction) ExecutePayload() *ExecutePayload {
+	exectx, ok := tx.inner.(*ExecuteTx)
+	if !ok {
+		return nil
+	}
+	payload := &ExecutePayload{
+		PreStateHash:    exectx.PreStateHash,
+		WitnessSize:     exectx.WitnessSize,
+		WithdrawalsSize: exectx.WithdrawalsSize,
+		AnchorSize:      exectx.AnchorSize,
+		Coinbase:        exectx.Coinbase,
+		BlockNumber:     exectx.BlockNumber,
+		Timestamp:       exectx.Timestamp,
+		To:              copyAddressPtr(exectx.To),
+	}
+	if exectx.Value != nil {
+		payload.Value = exectx.Value.ToBig()
+	} else {
+		payload.Value = new(big.Int)
+	}
+	payload.Data = common.CopyBytes(exectx.Data)
+	payload.Witness = common.CopyBytes(exectx.Witness)
+	payload.Withdrawals = common.CopyBytes(exectx.Withdrawals)
+	payload.Anchor = common.CopyBytes(exectx.Anchor)
+	payload.BlobHashes = make([]common.Hash, len(exectx.BlobHashes))
+	copy(payload.BlobHashes, exectx.BlobHashes)
+	return payload
 }
 
 // SetCodeAuthorities returns a list of unique authorities from the

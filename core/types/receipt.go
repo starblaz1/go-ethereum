@@ -72,6 +72,9 @@ type Receipt struct {
 	BlockHash        common.Hash `json:"blockHash,omitempty"`
 	BlockNumber      *big.Int    `json:"blockNumber,omitempty"`
 	TransactionIndex uint        `json:"transactionIndex"`
+
+	// ChainID is the chain id for native-rollup receipts (e.g. ExecuteTx). Nil for L1 receipts.
+	ChainID *big.Int `json:"chainId,omitempty"`
 }
 
 type receiptMarshaling struct {
@@ -85,6 +88,7 @@ type receiptMarshaling struct {
 	BlobGasPrice      *hexutil.Big
 	BlockNumber       *hexutil.Big
 	TransactionIndex  hexutil.Uint
+	ChainID           *hexutil.Big `json:"chainId,omitempty"`
 }
 
 // receiptRLP is the consensus encoding of a receipt.
@@ -205,7 +209,7 @@ func (r *Receipt) decodeTyped(b []byte) error {
 		return errShortTypedReceipt
 	}
 	switch b[0] {
-	case DynamicFeeTxType, AccessListTxType, BlobTxType, SetCodeTxType:
+	case DynamicFeeTxType, AccessListTxType, BlobTxType, SetCodeTxType, ExecuteTxType:
 		var data receiptRLP
 		err := rlp.DecodeBytes(b[1:], &data)
 		if err != nil {
@@ -284,6 +288,15 @@ func (r *Receipt) DeriveFields(signer Signer, context DeriveReceiptContext) {
 	if context.Tx.Type() == BlobTxType {
 		r.BlobGasUsed = context.Tx.BlobGas()
 		r.BlobGasPrice = context.BlobGasPrice
+	}
+
+	// Native-rollup receipts (ExecuteTx) carry the tx's chain id; L1 receipts have nil.
+	if context.Tx.Type() == ExecuteTxType {
+		if cid := context.Tx.ChainId(); cid != nil {
+			r.ChainID = new(big.Int).Set(cid)
+		}
+	} else {
+		r.ChainID = nil
 	}
 
 	// Block location fields
@@ -368,7 +381,7 @@ func (rs Receipts) EncodeIndex(i int, w *bytes.Buffer) {
 	}
 	w.WriteByte(r.Type)
 	switch r.Type {
-	case AccessListTxType, DynamicFeeTxType, BlobTxType, SetCodeTxType:
+	case AccessListTxType, DynamicFeeTxType, BlobTxType, SetCodeTxType, ExecuteTxType:
 		rlp.Encode(w, data)
 	default:
 		// For unsupported types, write nothing. Since this is for

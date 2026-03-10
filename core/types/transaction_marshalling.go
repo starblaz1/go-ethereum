@@ -44,6 +44,14 @@ type txJSON struct {
 	AccessList           *AccessList            `json:"accessList,omitempty"`
 	BlobVersionedHashes  []common.Hash          `json:"blobVersionedHashes,omitempty"`
 	AuthorizationList    []SetCodeAuthorization `json:"authorizationList,omitempty"`
+	PreStateHash         *common.Hash           `json:"preStateHash,omitempty"`
+	Coinbase             *common.Address        `json:"coinbase,omitempty"`
+	BlockNumber          *hexutil.Uint64        `json:"blockNumber,omitempty"`
+	Timestamp            *hexutil.Uint64        `json:"timestamp,omitempty"`
+	WitnessSize          *hexutil.Uint64        `json:"witnessSize,omitempty"`
+	WithdrawalsSize      *hexutil.Uint64        `json:"withdrawalsSize,omitempty"`
+	Witness              *hexutil.Bytes         `json:"witness,omitempty"`
+	Withdrawals          *hexutil.Bytes         `json:"withdrawals,omitempty"`
 	V                    *hexutil.Big           `json:"v"`
 	R                    *hexutil.Big           `json:"r"`
 	S                    *hexutil.Big           `json:"s"`
@@ -165,6 +173,40 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 		enc.Input = (*hexutil.Bytes)(&itx.Data)
 		enc.AccessList = &itx.AccessList
 		enc.AuthorizationList = itx.AuthList
+		enc.V = (*hexutil.Big)(itx.V.ToBig())
+		enc.R = (*hexutil.Big)(itx.R.ToBig())
+		enc.S = (*hexutil.Big)(itx.S.ToBig())
+		yparity := itx.V.Uint64()
+		enc.YParity = (*hexutil.Uint64)(&yparity)
+
+	case *ExecuteTx:
+		enc.ChainID = (*hexutil.Big)(itx.ChainID.ToBig())
+		enc.Nonce = (*hexutil.Uint64)(&itx.Nonce)
+		enc.To = tx.To()
+		enc.Gas = (*hexutil.Uint64)(&itx.Gas)
+		enc.MaxFeePerGas = (*hexutil.Big)(itx.GasFeeCap.ToBig())
+		enc.MaxPriorityFeePerGas = (*hexutil.Big)(itx.GasTipCap.ToBig())
+		enc.Value = (*hexutil.Big)(itx.Value.ToBig())
+		enc.Input = (*hexutil.Bytes)(&itx.Data)
+		if itx.BlobHashes != nil {
+			enc.BlobVersionedHashes = itx.BlobHashes
+		}
+		enc.Witness = (*hexutil.Bytes)(&itx.Witness)
+		enc.Withdrawals = (*hexutil.Bytes)(&itx.Withdrawals)
+		if itx.PreStateHash != (common.Hash{}) {
+			hashCopy := itx.PreStateHash
+			enc.PreStateHash = &hashCopy
+		}
+		coinbase := itx.Coinbase
+		enc.Coinbase = &coinbase
+		blockNumber := hexutil.Uint64(itx.BlockNumber)
+		enc.BlockNumber = &blockNumber
+		ts := hexutil.Uint64(itx.Timestamp)
+		enc.Timestamp = &ts
+		wSize := hexutil.Uint64(itx.WitnessSize)
+		enc.WitnessSize = &wSize
+		withdrawSize := hexutil.Uint64(itx.WithdrawalsSize)
+		enc.WithdrawalsSize = &withdrawSize
 		enc.V = (*hexutil.Big)(itx.V.ToBig())
 		enc.R = (*hexutil.Big)(itx.R.ToBig())
 		enc.S = (*hexutil.Big)(itx.S.ToBig())
@@ -475,6 +517,112 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'authorizationList' in transaction")
 		}
 		itx.AuthList = dec.AuthorizationList
+
+		// signature R
+		if dec.R == nil {
+			return errors.New("missing required field 'r' in transaction")
+		}
+		itx.R, overflow = uint256.FromBig((*big.Int)(dec.R))
+		if overflow {
+			return errors.New("'r' value overflows uint256")
+		}
+		// signature S
+		if dec.S == nil {
+			return errors.New("missing required field 's' in transaction")
+		}
+		itx.S, overflow = uint256.FromBig((*big.Int)(dec.S))
+		if overflow {
+			return errors.New("'s' value overflows uint256")
+		}
+		// signature V
+		vbig, err := dec.yParityValue()
+		if err != nil {
+			return err
+		}
+		itx.V, overflow = uint256.FromBig(vbig)
+		if overflow {
+			return errors.New("'v' value overflows uint256")
+		}
+		if itx.V.Sign() != 0 || itx.R.Sign() != 0 || itx.S.Sign() != 0 {
+			if err := sanityCheckSignature(vbig, itx.R.ToBig(), itx.S.ToBig(), false); err != nil {
+				return err
+			}
+		}
+
+	case ExecuteTxType:
+		var itx ExecuteTx
+		inner = &itx
+		if dec.ChainID == nil {
+			return errors.New("missing required field 'chainId' in transaction")
+		}
+		var overflow bool
+		itx.ChainID, overflow = uint256.FromBig(dec.ChainID.ToInt())
+		if overflow {
+			return errors.New("'chainId' value overflows uint256")
+		}
+		if dec.Nonce == nil {
+			return errors.New("missing required field 'nonce' in transaction")
+		}
+		itx.Nonce = uint64(*dec.Nonce)
+		if dec.Gas == nil {
+			return errors.New("missing required field 'gas' for txdata")
+		}
+		itx.Gas = uint64(*dec.Gas)
+		if dec.To != nil {
+			val := *dec.To
+			itx.To = &val
+		}
+		if dec.MaxPriorityFeePerGas == nil {
+			return errors.New("missing required field 'maxPriorityFeePerGas' for txdata")
+		}
+		itx.GasTipCap = uint256.MustFromBig((*big.Int)(dec.MaxPriorityFeePerGas))
+		if dec.MaxFeePerGas == nil {
+			return errors.New("missing required field 'maxFeePerGas' for txdata")
+		}
+		itx.GasFeeCap = uint256.MustFromBig((*big.Int)(dec.MaxFeePerGas))
+		if dec.Value == nil {
+			return errors.New("missing required field 'value' in transaction")
+		}
+		itx.Value = uint256.MustFromBig((*big.Int)(dec.Value))
+		if dec.Input == nil {
+			return errors.New("missing required field 'input' in transaction")
+		}
+		itx.Data = *dec.Input
+		if dec.PreStateHash == nil {
+			return errors.New("missing required field 'preStateHash' in transaction")
+		}
+		itx.PreStateHash = *dec.PreStateHash
+		if dec.Coinbase == nil {
+			return errors.New("missing required field 'coinbase' in transaction")
+		}
+		itx.Coinbase = *dec.Coinbase
+		if dec.BlockNumber == nil {
+			return errors.New("missing required field 'blockNumber' in transaction")
+		}
+		itx.BlockNumber = uint64(*dec.BlockNumber)
+		if dec.Timestamp == nil {
+			return errors.New("missing required field 'timestamp' in transaction")
+		}
+		itx.Timestamp = uint64(*dec.Timestamp)
+		if dec.Witness == nil {
+			return errors.New("missing required field 'witness' in transaction")
+		}
+		itx.Witness = *dec.Witness
+		if dec.WitnessSize != nil && uint64(*dec.WitnessSize) != uint64(len(itx.Witness)) {
+			return errExecuteWitnessSizeMismatch
+		}
+		itx.WitnessSize = uint32(len(itx.Witness))
+		if dec.Withdrawals == nil {
+			return errors.New("missing required field 'withdrawals' in transaction")
+		}
+		itx.Withdrawals = *dec.Withdrawals
+		if dec.WithdrawalsSize != nil && uint64(*dec.WithdrawalsSize) != uint64(len(itx.Withdrawals)) {
+			return errExecuteWithdrawalsSizeMismatch
+		}
+		itx.WithdrawalsSize = uint32(len(itx.Withdrawals))
+		if dec.BlobVersionedHashes != nil {
+			itx.BlobHashes = dec.BlobVersionedHashes
+		}
 
 		// signature R
 		if dec.R == nil {

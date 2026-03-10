@@ -146,7 +146,6 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	if stateless {
 		return nil
 	}
-	// The receipt Trie's root (R = (Tr [[H1, R1], ... [Hn, Rn]]))
 	receiptSha := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
 	if receiptSha != header.ReceiptHash {
 		return fmt.Errorf("invalid receipt root hash (remote: %x local: %x)", header.ReceiptHash, receiptSha)

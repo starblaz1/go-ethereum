@@ -95,6 +95,7 @@ func newVerkleInstructionSet() JumpTable {
 func newOsakaInstructionSet() JumpTable {
 	instructionSet := newPragueInstructionSet()
 	enable7939(&instructionSet) // EIP-7939 (CLZ opcode)
+	enableExecuteOpcode(&instructionSet)
 	return validate(instructionSet)
 }
 
@@ -1102,4 +1103,15 @@ func copyJumpTable(source *JumpTable) *JumpTable {
 		}
 	}
 	return &dest
+}
+
+func enableExecuteOpcode(instructionSet *JumpTable) {
+	(*instructionSet)[EXECUTE] = &operation{
+		execute:     opExecute,
+		constantGas: 0,
+		dynamicGas:  gasExecute,
+		minStack:    minStack(6, 1),
+		maxStack:    maxStack(6, 1),
+		memorySize:  memoryExecute,
+	}
 }
