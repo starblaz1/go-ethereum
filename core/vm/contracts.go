@@ -1582,6 +1582,21 @@ func (c *executePrecompile) Run(input []byte) ([]byte, error) {
 		"dataLength", dataLength,
 	)
 
+	// No-op execution: when exec_to is the zero address and there is no exec data or
+	// value, there is no L2 call to re-execute inside the stateless EVM. This is the
+	// common case for native rollup blocks whose state transition is represented
+	// entirely by the witness. Skip the inner EVM call to avoid a "missing trie node"
+	// error for the zero address, which is never present in the execution witness.
+	if (toAddr == common.Address{}) && dataLength == 0 && value.IsZero() {
+		log.Info("EXECUTE precompile: no-op exec target, skipping inner EVM call",
+			"blockNumber", blockNumber,
+			"preStateHash", preStateHash.Hex(),
+		)
+		gasConsumedBytes := make([]byte, 32)
+		result := append(gasConsumedBytes, preStateHash[:]...)
+		return result, nil
+	}
+
 	// Process anchor data for L1->L2 messaging per EIP-8079
 	// The anchor is injected into ANCHOR_ADDRESS via system transaction
 	if len(anchorData) > 0 {
